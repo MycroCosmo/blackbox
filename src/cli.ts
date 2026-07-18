@@ -2,7 +2,7 @@
 import { fileURLToPath } from "node:url";
 import { Command } from "commander";
 import { runClaudeHook } from "./claude-hook.js";
-import { startCollector } from "./collector-server.js";
+import { parseCollectorPort, startCollector } from "./collector-server.js";
 import { loadConfig } from "./config.js";
 import { runDevSession } from "./dev-session.js";
 import { runMcpServer } from "./mcp-server.js";
@@ -31,7 +31,7 @@ const program = new Command();
 program
   .name("dev-blackbox")
   .description("Local flight recorder for AI coding agents")
-  .version("0.2.0")
+  .version("0.2.1")
   .enablePositionalOptions();
 
 function ctx() {
@@ -123,7 +123,7 @@ program
       cwd: process.cwd(),
       storage,
       config,
-      port: opts.port ? Number(opts.port) : undefined,
+      port: parseCollectorPort(opts.port),
     });
     process.exit(outcome.exitCode);
   });
@@ -266,7 +266,7 @@ program
     const collector = await startCollector({
       storage,
       config,
-      port: opts.port ? Number(opts.port) : undefined,
+      port: parseCollectorPort(opts.port),
     });
     console.log(
       [

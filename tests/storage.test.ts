@@ -5,7 +5,7 @@ import { spawn } from "node:child_process";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { DEFAULT_CONFIG } from "../src/config.js";
 import { recordFailure, setStatus } from "../src/incident.js";
-import { prune, storageStatus } from "../src/retention.js";
+import { autoPrune, prune, storageStatus } from "../src/retention.js";
 import { Storage, readJsonl } from "../src/storage.js";
 import { SCHEMA_VERSION } from "../src/types.js";
 
@@ -143,6 +143,107 @@ describe("prune", () => {
     expect(result.removedSessionFiles).toBe(1);
     expect(storage.readCommands()).toHaveLength(0);
   });
+
+  it("throttles automatic prune calls but allows a later maintenance pass", () => {
+    const config = {
+      ...DEFAULT_CONFIG,
+      storage: { maxTotalSizeMB: 0 },
+      retention: { ...DEFAULT_CONFIG.retention, autoPruneMinIntervalMinutes: 5 },
+    };
+    const append = (sessionId: string) => storage.appendCommand({
+      schemaVersion: SCHEMA_VERSION,
+      sessionId,
+      command: "npm test",
+      cwd: dir,
+      startedAt: new Date().toISOString(),
+      endedAt: new Date().toISOString(),
+      durationMs: 1,
+      exitCode: 0,
+      signal: null,
+      timedOut: false,
+    });
+
+    append("first");
+    expect(autoPrune(storage, config, { now: new Date("2026-07-18T00:00:00Z") }).removedSessionFiles).toBe(1);
+    append("second");
+    expect(autoPrune(storage, config, { now: new Date("2026-07-18T00:01:00Z") }).removedSessionFiles).toBe(0);
+    expect(storage.readCommands()).toHaveLength(1);
+    expect(autoPrune(storage, config, { now: new Date("2026-07-18T00:06:00Z") }).removedSessionFiles).toBe(1);
+  });
+
+  it("skips automatic prune when another maintenance owner holds the lock", () => {
+    storage.appendCommand({
+      schemaVersion: SCHEMA_VERSION,
+      sessionId: "locked",
+      command: "npm test",
+      cwd: dir,
+      startedAt: new Date().toISOString(),
+      endedAt: new Date().toISOString(),
+      durationMs: 1,
+      exitCode: 0,
+      signal: null,
+      timedOut: false,
+    });
+    const other = new Storage(storage.root);
+    storage.withMaintenanceLock(() => {
+      const result = autoPrune(other, { ...DEFAULT_CONFIG, storage: { maxTotalSizeMB: 0 } });
+      expect(result.removedSessionFiles).toBe(0);
+      expect(other.readCommands()).toHaveLength(1);
+    });
+  });
+
+  it("serializes concurrent cross-process prune operations", async () => {
+    storage.ensureDirs();
+    const records = Array.from({ length: 100 }, (_, index) => ({
+      schemaVersion: 1,
+      requestId: `REQ-20260718-${String(index + 1).padStart(3, "0")}`,
+      sessionId: "SESSION-concurrent",
+      receivedAt: "2026-07-18T00:00:00.000Z",
+      timestamp: "2026-07-18T00:00:00.000Z",
+      method: "GET",
+      url: `/api/items/${index}`,
+      status: 500,
+      classification: "http_error",
+    }));
+    fs.writeFileSync(storage.networkFile, records.map((record) => JSON.stringify(record)).join("\n") + "\n");
+
+    const barrier = path.join(dir, "prune-barrier");
+    const tsxCli = path.resolve("node_modules", "tsx", "dist", "cli.mjs");
+    const fixture = path.resolve("tests", "fixtures", "concurrent-prune.ts");
+    const workers = Array.from({ length: 4 }, (_, index) => {
+      const child = spawn(process.execPath, [tsxCli, fixture, storage.root, barrier, String(index)], {
+        cwd: dir,
+        stdio: ["ignore", "ignore", "pipe"],
+      });
+      let stderr = "";
+      child.stderr.setEncoding("utf8");
+      child.stderr.on("data", (chunk: string) => (stderr += chunk));
+      return new Promise<void>((resolve, reject) => {
+        child.once("error", reject);
+        child.once("close", (code) =>
+          code === 0 ? resolve() : reject(new Error(`prune worker ${index} exited ${code}: ${stderr}`)),
+        );
+      });
+    });
+
+    try {
+      const deadline = Date.now() + 10_000;
+      while (
+        workers.some((_, index) => !fs.existsSync(`${barrier}.${index}.ready`)) &&
+        Date.now() < deadline
+      ) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      expect(workers.every((_, index) => fs.existsSync(`${barrier}.${index}.ready`))).toBe(true);
+    } finally {
+      fs.writeFileSync(barrier, "go", "utf8");
+    }
+    await Promise.all(workers);
+
+    expect(storage.readNetwork()).toHaveLength(100);
+    expect(fs.existsSync(storage.maintenanceLockFile)).toBe(false);
+    expect(fs.readdirSync(storage.root).some((name) => name.startsWith("network.jsonl.tmp-"))).toBe(false);
+  }, 30_000);
 
   it("removes orphaned blobs", () => {
     storage.ensureDirs();

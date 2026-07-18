@@ -1,6 +1,8 @@
+import fs from "node:fs";
+import { fileURLToPath } from "node:url";
 import type { BlackboxConfig } from "./config.js";
 import { startCollector, type Collector } from "./collector-server.js";
-import { prune } from "./retention.js";
+import { autoPrune } from "./retention.js";
 import { runCommand } from "./runner.js";
 import type { Storage } from "./storage.js";
 import type { RunOutcome } from "./types.js";
@@ -41,7 +43,7 @@ export async function runDevSession(
   let port: number;
 
   try {
-    prune(storage, config);
+    autoPrune(storage, config);
   } catch {
     /* maintenance is best effort */
   }
@@ -69,11 +71,9 @@ export async function runDevSession(
   } finally {
     if (ownsCollector && collector) await collector.close();
     try {
-      prune(storage, config);
+      autoPrune(storage, config);
     } catch {
       /* maintenance is best effort */
     }
   }
 }
-import fs from "node:fs";
-import { fileURLToPath } from "node:url";

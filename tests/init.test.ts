@@ -68,6 +68,9 @@ describe("runInit", () => {
   });
 
   it("auto mode creates AGENTS.md and safely wraps the dev script", () => {
+    const binDir = path.join(dir, "node_modules", ".bin");
+    fs.mkdirSync(binDir, { recursive: true });
+    fs.writeFileSync(path.join(binDir, process.platform === "win32" ? "dev-blackbox.cmd" : "dev-blackbox"), "", "utf8");
     fs.writeFileSync(
       path.join(dir, "package.json"),
       JSON.stringify({ name: "demo", scripts: { dev: "next dev" } }, null, 2) + "\n",
@@ -94,6 +97,9 @@ describe("runInit", () => {
   });
 
   it("does not overwrite an existing backup script", () => {
+    const binDir = path.join(dir, "node_modules", ".bin");
+    fs.mkdirSync(binDir, { recursive: true });
+    fs.writeFileSync(path.join(binDir, process.platform === "win32" ? "dev-blackbox.cmd" : "dev-blackbox"), "", "utf8");
     fs.writeFileSync(
       path.join(dir, "package.json"),
       JSON.stringify({ scripts: { dev: "next dev", "dev:original": "vite" } }),
@@ -104,6 +110,19 @@ describe("runInit", () => {
     const pkg = JSON.parse(fs.readFileSync(path.join(dir, "package.json"), "utf8"));
     expect(pkg.scripts.dev).toBe("next dev");
     expect(pkg.scripts["dev:original"]).toBe("vite");
+  });
+
+  it("skips script wrapping when dev-blackbox is not installed locally", () => {
+    fs.writeFileSync(
+      path.join(dir, "package.json"),
+      JSON.stringify({ scripts: { dev: "vite" } }),
+      "utf8",
+    );
+    const result = runInit(dir, { auto: true });
+    expect(result.scriptWrap).toMatchObject({ status: "skipped" });
+    expect(result.scriptWrap?.message).toContain("npm install -D dev-blackbox");
+    const pkg = JSON.parse(fs.readFileSync(path.join(dir, "package.json"), "utf8"));
+    expect(pkg.scripts).toEqual({ dev: "vite" });
   });
 });
 

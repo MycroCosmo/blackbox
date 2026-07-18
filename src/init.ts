@@ -151,6 +151,18 @@ export function wrapPackageScript(projectDir: string, script = "dev"): ScriptWra
   const scripts = (parsed.scripts ??= {});
   const originalScript = `${script}:original`;
   const wrapper = `dev-blackbox dev -- npm run ${originalScript}`;
+  const localBinary = path.join(projectDir, "node_modules", ".bin", "dev-blackbox");
+  const installedLocally = [localBinary, `${localBinary}.cmd`, `${localBinary}.ps1`].some(
+    (candidate) => fs.existsSync(candidate),
+  );
+  if (!installedLocally) {
+    return {
+      script,
+      originalScript,
+      status: "skipped",
+      message: "dev-blackbox is not installed locally; run `npm install -D dev-blackbox` and retry",
+    };
+  }
   if (scripts[script] === wrapper && typeof scripts[originalScript] === "string") {
     return { script, originalScript, status: "already_wrapped", message: `${script} is already wrapped` };
   }

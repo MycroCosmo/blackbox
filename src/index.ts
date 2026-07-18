@@ -56,7 +56,7 @@ export {
   type ProcessMeta,
 } from "./process-manager.js";
 export { renderIncidentReport, writeIncidentReport } from "./report.js";
-export { prune, storageStatus } from "./retention.js";
+export { autoPrune, prune, storageStatus } from "./retention.js";
 export { RingBuffer } from "./ring-buffer.js";
 export { runCommand } from "./runner.js";
 export { Redactor } from "./security.js";

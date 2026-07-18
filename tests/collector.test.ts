@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { startCollector, type Collector } from "../src/collector-server.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { parseCollectorPort, startCollector, type Collector } from "../src/collector-server.js";
 import { DEFAULT_CONFIG } from "../src/config.js";
 import { setStatus } from "../src/incident.js";
 import { renderNetworkReport } from "../src/network-report.js";
@@ -41,6 +41,13 @@ const event = (over: object = {}) => ({
 });
 
 describe("collector server", () => {
+  it("validates CLI collector ports", () => {
+    expect(parseCollectorPort(undefined)).toBeUndefined();
+    expect(parseCollectorPort("4319")).toBe(4319);
+    for (const invalid of ["abc", "0", "65536", "4.5", ""]) {
+      expect(() => parseCollectorPort(invalid)).toThrow(/invalid collector port/);
+    }
+  });
   it("binds to 127.0.0.1 and answers /health", async () => {
     const res = await fetch(`http://127.0.0.1:${collector.port}/health`);
     expect(res.status).toBe(200);
@@ -60,12 +67,23 @@ describe("collector server", () => {
 
   it("automatically regenerates incident and network Markdown views", async () => {
     const response = await (await post(event())).json() as { requestId: string; incidentId: string };
-    expect(fs.existsSync(storage.networkSummaryFile)).toBe(true);
-    expect(fs.readFileSync(storage.networkSummaryFile, "utf8")).toContain("Failed: 1");
     const requestReport = path.join(storage.networkReportsDir, `${response.requestId}.md`);
     expect(fs.readFileSync(requestReport, "utf8")).toContain(response.incidentId);
     const incidentReport = path.join(storage.reportsDir, `${response.incidentId}.md`);
     expect(fs.readFileSync(incidentReport, "utf8")).toContain(response.requestId);
+    collector.flushReports();
+    expect(fs.readFileSync(storage.networkSummaryFile, "utf8")).toContain("Failed: 1");
+  });
+
+  it("debounces full network summary reads until a scheduled or explicit flush", async () => {
+    const readNetwork = vi.spyOn(storage, "readNetwork");
+    readNetwork.mockClear();
+    await post(event());
+    await post(event());
+    expect(readNetwork).not.toHaveBeenCalled();
+    collector.flushReports();
+    expect(readNetwork).toHaveBeenCalledTimes(1);
+    readNetwork.mockRestore();
   });
 
   it("rejects invalid payloads without crashing", async () => {

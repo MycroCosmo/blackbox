@@ -33,7 +33,7 @@ if (collectorUrl && typeof globalThis.fetch === "function" && !state[PATCHED]) {
       });
       return response;
     } catch (error) {
-      await report({
+      void report({
         timestamp: new Date().toISOString(),
         traceId,
         source: { application: process.env.npm_package_name ?? "node" },

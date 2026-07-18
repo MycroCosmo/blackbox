@@ -1,6 +1,6 @@
 {
   "name": "dev-blackbox",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "A local flight recorder that automatically captures development command and network failures for AI coding agents.",
   "license": "MIT",
   "type": "module",
@@ -26,7 +26,8 @@
   },
   "files": [
     "dist",
-    "examples"
+    "examples",
+    "README.ko.md"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",

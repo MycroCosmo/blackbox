@@ -1,5 +1,7 @@
 # Dev Blackbox
 
+[한국어 문서](README.ko.md)
+
 A local flight recorder for AI coding agents. Dev Blackbox runs a project's
 development command with terminal recording and a loopback-only network
 collector, then turns failures into redacted, structured incidents and
@@ -20,6 +22,11 @@ consumer's `package.json`. It:
 - writes agent rules to `CLAUDE.md` and `AGENTS.md`;
 - preserves the existing `dev` command as `dev:original`;
 - changes `dev` to `dev-blackbox dev -- npm run dev:original`.
+
+Automatic wrapping requires a local installation. If
+`node_modules/.bin/dev-blackbox` is missing, initialization leaves
+`package.json` unchanged and prints the exact install command instead of
+creating a broken script.
 
 For another npm script, use `npx dev-blackbox init --auto --script start`.
 Existing backup scripts are never overwritten, and repeated initialization is
@@ -43,13 +50,17 @@ Process, build, and test failures create a deduplicated incident:
 .dev-blackbox/reports/incidents/INC-20260718-001.md
 ```
 
-Failed recorded network requests create and link all three views immediately:
+Failed recorded network requests create and link these views:
 
 ```text
 .dev-blackbox/reports/incidents/INC-20260718-002.md
 .dev-blackbox/reports/network/REQ-20260718-001.md
 .dev-blackbox/reports/NETWORK.md
 ```
+
+Failure-specific `INC-...md` and `REQ-...md` files are written immediately.
+The aggregate `NETWORK.md` view is refreshed at most once every five seconds
+and flushed when the collector stops, avoiding a full JSONL scan per request.
 
 Markdown files are regenerated views. JSONL records and compressed redacted
 logs are the source of truth used by query commands and agents.
@@ -90,8 +101,11 @@ size-capped and binary payloads are excluded.
 
 ## Automatic retention
 
-Retention runs after recorded commands, when a collector starts and stops, and
-every 24 hours while a collector remains active. Defaults are:
+Automatic retention is checked after recorded commands, when a collector
+starts, and every 24 hours while a collector remains active. Checks are
+throttled to once every five minutes and serialized by a cross-process
+maintenance lock. Collector shutdown performs one final forced pass so
+successful response bodies are stripped promptly. Defaults are:
 
 - successful command sessions: 3 days;
 - successful network metadata: 3 days;
@@ -123,6 +137,7 @@ retention:
   successfulRequestDays: 3
   failedRequestBodyDays: 30
   autoPruneIntervalHours: 24
+  autoPruneMinIntervalMinutes: 5
 ```
 
 ## CLI

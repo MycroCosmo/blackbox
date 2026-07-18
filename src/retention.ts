@@ -51,20 +51,48 @@ export interface PruneResult {
   removedReports: number;
 }
 
+export interface PruneOptions {
+  olderThanDays?: number;
+  now?: Date;
+}
+
 export function prune(
   storage: Storage,
   config: BlackboxConfig,
-  opts: { olderThanDays?: number; now?: Date } = {},
+  opts: PruneOptions = {},
+): PruneResult {
+  return storage.withMaintenanceLock(() => {
+    const result = pruneUnlocked(storage, config, opts);
+    writeLastPruneAt(storage, opts.now ?? new Date());
+    return result;
+  }, true) ?? emptyResult();
+}
+
+/** Best-effort automatic maintenance. It skips when another process owns the
+ * maintenance lock or when the configured minimum interval has not elapsed. */
+export function autoPrune(
+  storage: Storage,
+  config: BlackboxConfig,
+  opts: PruneOptions = {},
 ): PruneResult {
   const now = opts.now ?? new Date();
-  const result: PruneResult = {
-    removedSessionFiles: 0,
-    removedIncidents: 0,
-    removedBlobs: 0,
-    removedNetworkEvents: 0,
-    strippedNetworkBodies: 0,
-    removedReports: 0,
-  };
+  return storage.withMaintenanceLock(() => {
+    const minimumMs = Math.max(0, config.retention.autoPruneMinIntervalMinutes) * 60_000;
+    const last = readLastPruneAt(storage);
+    if (last != null && now.getTime() - last < minimumMs) return emptyResult();
+    const result = pruneUnlocked(storage, config, { ...opts, now });
+    writeLastPruneAt(storage, now);
+    return result;
+  }, false) ?? emptyResult();
+}
+
+function pruneUnlocked(
+  storage: Storage,
+  config: BlackboxConfig,
+  opts: PruneOptions,
+): PruneResult {
+  const now = opts.now ?? new Date();
+  const result = emptyResult();
   const removedIncidentIds = new Set<string>();
   const removedRequestIds = new Set<string>();
   const collectorLock = storage.readCollectorLock();
@@ -187,6 +215,36 @@ export function prune(
   }
 
   return result;
+}
+
+function emptyResult(): PruneResult {
+  return {
+    removedSessionFiles: 0,
+    removedIncidents: 0,
+    removedBlobs: 0,
+    removedNetworkEvents: 0,
+    strippedNetworkBodies: 0,
+    removedReports: 0,
+  };
+}
+
+function readLastPruneAt(storage: Storage): number | undefined {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(storage.lastPruneFile, "utf8")) as { at?: unknown };
+    if (typeof parsed.at !== "string") return undefined;
+    const value = Date.parse(parsed.at);
+    return Number.isFinite(value) ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function writeLastPruneAt(storage: Storage, now: Date): void {
+  try {
+    fs.writeFileSync(storage.lastPruneFile, JSON.stringify({ at: now.toISOString() }), "utf8");
+  } catch {
+    /* a missing throttle marker only causes a later retry */
+  }
 }
 
 /** Enforces the configured cap without deleting open or pinned incidents.

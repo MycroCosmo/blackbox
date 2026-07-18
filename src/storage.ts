@@ -20,6 +20,7 @@ const LOCK_WAIT_ARRAY = new Int32Array(new SharedArrayBuffer(4));
 export class Storage {
   readonly root: string;
   private incidentLockDepth = 0;
+  private maintenanceLockDepth = 0;
 
   constructor(root: string) {
     this.root = root;
@@ -68,6 +69,12 @@ export class Storage {
   }
   get incidentsLockFile(): string {
     return path.join(this.root, ".incidents.lock");
+  }
+  get maintenanceLockFile(): string {
+    return path.join(this.root, ".maintenance.lock");
+  }
+  get lastPruneFile(): string {
+    return path.join(this.root, ".last-prune.json");
   }
 
   ensureDirs(): void {
@@ -141,6 +148,52 @@ export class Storage {
       } finally {
         try {
           fs.rmSync(this.incidentsLockFile);
+        } catch {
+          /* stale-lock cleanup or external deletion already removed it */
+        }
+      }
+    }
+  }
+
+  /** Serializes retention and compaction across processes. Automatic
+   * maintenance can use wait=false and cheaply skip when another prune owns
+   * the lock; explicit maintenance waits for a deterministic result. */
+  withMaintenanceLock<T>(operation: () => T, wait = true): T | undefined {
+    if (this.maintenanceLockDepth > 0) return operation();
+    this.ensureDirs();
+    const deadline = Date.now() + INCIDENT_LOCK_TIMEOUT_MS;
+    let fd: number | undefined;
+
+    while (fd === undefined) {
+      try {
+        fd = fs.openSync(this.maintenanceLockFile, "wx");
+        fs.writeFileSync(
+          fd,
+          JSON.stringify({ pid: process.pid, acquiredAt: new Date().toISOString() }),
+          "utf8",
+        );
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code !== "EEXIST") throw error;
+        if (this.removeStaleLock(this.maintenanceLockFile)) continue;
+        if (!wait) return undefined;
+        if (Date.now() >= deadline) {
+          throw new Error(`timed out waiting for maintenance lock: ${this.maintenanceLockFile}`);
+        }
+        Atomics.wait(LOCK_WAIT_ARRAY, 0, 0, 10);
+      }
+    }
+
+    this.maintenanceLockDepth++;
+    try {
+      return operation();
+    } finally {
+      this.maintenanceLockDepth--;
+      try {
+        fs.closeSync(fd);
+      } finally {
+        try {
+          fs.rmSync(this.maintenanceLockFile);
         } catch {
           /* stale-lock cleanup or external deletion already removed it */
         }
@@ -222,7 +275,7 @@ export class Storage {
 
   compactNetwork(keep: NetworkRecord[]): void {
     this.ensureDirs();
-    const tmp = this.networkFile + ".tmp";
+    const tmp = this.networkFile + `.tmp-${process.pid}-${crypto.randomBytes(4).toString("hex")}`;
     fs.writeFileSync(
       tmp,
       keep.map((r) => JSON.stringify(r)).join("\n") + (keep.length ? "\n" : ""),
@@ -295,7 +348,7 @@ export class Storage {
   /** Rewrites incidents.jsonl compacted to one record per id (used by prune). */
   compactIncidents(keep: IncidentRecord[]): void {
     this.withIncidentLock(() => {
-      const tmp = this.incidentsFile + `.tmp-${process.pid}`;
+      const tmp = this.incidentsFile + `.tmp-${process.pid}-${crypto.randomBytes(4).toString("hex")}`;
       fs.writeFileSync(tmp, keep.map((r) => JSON.stringify(r)).join("\n") + (keep.length ? "\n" : ""), "utf8");
       fs.renameSync(tmp, this.incidentsFile);
     });
@@ -306,17 +359,21 @@ export class Storage {
   }
 
   private removeStaleIncidentLock(): boolean {
+    return this.removeStaleLock(this.incidentsLockFile);
+  }
+
+  private removeStaleLock(lockFile: string): boolean {
     try {
-      const stat = fs.statSync(this.incidentsLockFile);
+      const stat = fs.statSync(lockFile);
       let ownerAlive: boolean | undefined;
       try {
-        const data = JSON.parse(fs.readFileSync(this.incidentsLockFile, "utf8")) as { pid?: unknown };
+        const data = JSON.parse(fs.readFileSync(lockFile, "utf8")) as { pid?: unknown };
         if (typeof data.pid === "number") ownerAlive = processIsAlive(data.pid);
       } catch {
         /* a creator may still be writing; age check below handles true stale locks */
       }
       if (ownerAlive === false || (ownerAlive === undefined && Date.now() - stat.mtimeMs > INCIDENT_LOCK_STALE_MS)) {
-        fs.rmSync(this.incidentsLockFile);
+        fs.rmSync(lockFile);
         return true;
       }
     } catch {

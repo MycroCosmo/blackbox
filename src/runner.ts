@@ -5,7 +5,7 @@ import type { BlackboxConfig } from "./config.js";
 import { detectSoftSignals } from "./detection.js";
 import { markResolveCandidates, recordFailure } from "./incident.js";
 import { writeIncidentReport } from "./report.js";
-import { prune } from "./retention.js";
+import { autoPrune } from "./retention.js";
 import { RingBuffer } from "./ring-buffer.js";
 import { Redactor } from "./security.js";
 import type { Storage } from "./storage.js";
@@ -274,7 +274,7 @@ export async function runCommand(argv: string[], opts: RunOptions): Promise<RunO
   }
 
   try {
-    prune(storage, config);
+    autoPrune(storage, config);
   } catch {
     /* automatic retention must never affect the child result */
   }
