@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.dev-blackbox/
+graphify-out/
+smoke-project/
+.agents/
+*.log
