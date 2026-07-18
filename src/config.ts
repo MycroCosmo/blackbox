@@ -21,6 +21,7 @@ export interface BlackboxConfig {
     resolvedIncidentDays: number;
     successfulRequestDays: number;
     failedRequestBodyDays: number;
+    autoPruneIntervalHours: number;
   };
   security: {
     redactBodyKeys: string[];
@@ -51,6 +52,7 @@ export const DEFAULT_CONFIG: BlackboxConfig = {
     resolvedIncidentDays: 90,
     successfulRequestDays: 3,
     failedRequestBodyDays: 30,
+    autoPruneIntervalHours: 24,
   },
   security: {
     redactBodyKeys: [
@@ -129,6 +131,7 @@ export function defaultConfigYaml(): string {
     "  resolvedIncidentDays: 90",
     "  successfulRequestDays: 3",
     "  failedRequestBodyDays: 30",
+    "  autoPruneIntervalHours: 24",
     "collector:",
     "  # The collector binds to 127.0.0.1 only (never exposed externally).",
     "  port: 4319",

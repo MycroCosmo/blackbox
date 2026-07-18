@@ -5,6 +5,7 @@ import type { BlackboxConfig } from "./config.js";
 import { detectSoftSignals } from "./detection.js";
 import { markResolveCandidates, recordFailure } from "./incident.js";
 import { writeIncidentReport } from "./report.js";
+import { prune } from "./retention.js";
 import { RingBuffer } from "./ring-buffer.js";
 import { Redactor } from "./security.js";
 import type { Storage } from "./storage.js";
@@ -31,6 +32,8 @@ export interface RunOptions {
   /** MCP owns stdin as its JSON-RPC channel, so quiet/MCP runs must not pass
    *  that stream to the child. Defaults to ignore when quiet, inherit otherwise. */
   stdin?: "inherit" | "ignore";
+  /** Environment for the child process. Defaults to the current environment. */
+  env?: NodeJS.ProcessEnv;
 }
 
 /** Incrementally splits a byte stream into lines. */
@@ -53,12 +56,13 @@ function spawnChild(
   argv: string[],
   cwd: string,
   stdin: "inherit" | "ignore",
+  env: NodeJS.ProcessEnv,
 ): ChildProcess {
   const [cmd, ...args] = argv;
   return spawn(cmd!, args, {
     cwd,
     stdio: [stdin, "pipe", "pipe"],
-    env: process.env,
+    env,
   });
 }
 
@@ -67,6 +71,7 @@ function spawnViaShell(
   argv: string[],
   cwd: string,
   stdin: "inherit" | "ignore",
+  env: NodeJS.ProcessEnv,
 ): ChildProcess {
   const quoted = argv
     .map((a) => (/[\s"^&|<>]/.test(a) ? `"${a.replace(/"/g, '""')}"` : a))
@@ -74,7 +79,7 @@ function spawnViaShell(
   return spawn(quoted, {
     cwd,
     stdio: [stdin, "pipe", "pipe"],
-    env: process.env,
+    env,
     shell: true,
   });
 }
@@ -85,6 +90,7 @@ export async function runCommand(argv: string[], opts: RunOptions): Promise<RunO
   const redactor = new Redactor(config.security.redactBodyKeys);
   const commandString = redactor.redactCommand(argv);
   const stdin = opts.stdin ?? (opts.quiet ? "ignore" : "inherit");
+  const env = opts.env ?? process.env;
   const buffer = new RingBuffer(config.ringBuffer);
   const startedAt = new Date();
 
@@ -141,7 +147,7 @@ export async function runCommand(argv: string[], opts: RunOptions): Promise<RunO
         // ENOENT on Windows often just means a .cmd shim — retry via shell.
         if (!usedShellFallback && process.platform === "win32" && e.code === "ENOENT") {
           usedShellFallback = true;
-          child = spawnViaShell(argv, cwd, stdin);
+          child = spawnViaShell(argv, cwd, stdin, env);
           attach(child);
           return;
         }
@@ -162,7 +168,7 @@ export async function runCommand(argv: string[], opts: RunOptions): Promise<RunO
       });
     };
 
-    child = spawnChild(argv, cwd, stdin);
+    child = spawnChild(argv, cwd, stdin, env);
     attach(child);
 
     if (opts.timeoutMs && opts.timeoutMs > 0) {
@@ -265,6 +271,12 @@ export async function runCommand(argv: string[], opts: RunOptions): Promise<RunO
   } catch (e) {
     if (!opts.quiet)
       process.stderr.write(`dev-blackbox: recording failed (command result unaffected): ${String(e)}\n`);
+  }
+
+  try {
+    prune(storage, config);
+  } catch {
+    /* automatic retention must never affect the child result */
   }
 
   if (failed && incidentId && !opts.quiet) {

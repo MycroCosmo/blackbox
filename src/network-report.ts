@@ -54,3 +54,40 @@ export function renderNetworkReport(
   lines.push("");
   return lines.join("\n");
 }
+
+/** Detailed regenerated view for one failed network event. The record has
+ * already been redacted and size-capped by the collector before rendering. */
+export function renderNetworkFailureReport(record: NetworkRecord): string {
+  const lines = [
+    `# ${record.requestId} ${record.classification}`,
+    "",
+    `- Time: ${record.timestamp}`,
+    `- Request: ${record.method} ${record.url}`,
+    `- Status: ${record.status ?? "-"}`,
+    `- Duration: ${record.durationMs != null ? `${record.durationMs}ms` : "-"}`,
+    `- Trace: ${record.traceId ?? "-"}`,
+    `- Incident: ${record.incidentId ?? "-"}`,
+  ];
+  if (record.errorMessage) lines.push(`- Error: ${record.errorMessage}`);
+  lines.push("");
+
+  if (record.contractMismatches?.length) {
+    lines.push("## Contract mismatches", "");
+    for (const mismatch of record.contractMismatches) {
+      lines.push(`- ${mismatch.path}: expected ${mismatch.expected}, got ${mismatch.actual}`);
+    }
+    lines.push("");
+  }
+
+  const sections: Array<[string, unknown]> = [
+    ["Request headers", record.requestHeaders],
+    ["Request body", record.requestBody],
+    ["Response headers", record.responseHeaders],
+    ["Response body", record.responseBody],
+  ];
+  for (const [title, value] of sections) {
+    if (value === undefined) continue;
+    lines.push(`## ${title}`, "", "```json", JSON.stringify(value, null, 2), "```", "");
+  }
+  return lines.join("\n");
+}

@@ -66,6 +66,45 @@ describe("runInit", () => {
     expect(withOptIn.updatedInstructionFiles).toContain("AGENTS.md");
     expect(fs.readFileSync(path.join(dir, "AGENTS.md"), "utf8")).toContain(BLOCK_START);
   });
+
+  it("auto mode creates AGENTS.md and safely wraps the dev script", () => {
+    fs.writeFileSync(
+      path.join(dir, "package.json"),
+      JSON.stringify({ name: "demo", scripts: { dev: "next dev" } }, null, 2) + "\n",
+      "utf8",
+    );
+    const first = runInit(dir, { auto: true });
+    expect(first.scriptWrap).toMatchObject({
+      status: "wrapped",
+      script: "dev",
+      originalScript: "dev:original",
+    });
+    const pkg = JSON.parse(fs.readFileSync(path.join(dir, "package.json"), "utf8"));
+    expect(pkg.scripts).toEqual({
+      dev: "dev-blackbox dev -- npm run dev:original",
+      "dev:original": "next dev",
+    });
+    expect(fs.readFileSync(path.join(dir, "AGENTS.md"), "utf8")).toContain(BLOCK_START);
+
+    const second = runInit(dir, { auto: true });
+    expect(second.scriptWrap?.status).toBe("already_wrapped");
+    expect(JSON.parse(fs.readFileSync(path.join(dir, "package.json"), "utf8")).scripts).toEqual(
+      pkg.scripts,
+    );
+  });
+
+  it("does not overwrite an existing backup script", () => {
+    fs.writeFileSync(
+      path.join(dir, "package.json"),
+      JSON.stringify({ scripts: { dev: "next dev", "dev:original": "vite" } }),
+      "utf8",
+    );
+    const result = runInit(dir, { auto: true });
+    expect(result.scriptWrap?.status).toBe("skipped");
+    const pkg = JSON.parse(fs.readFileSync(path.join(dir, "package.json"), "utf8"));
+    expect(pkg.scripts.dev).toBe("next dev");
+    expect(pkg.scripts["dev:original"]).toBe("vite");
+  });
 });
 
 describe("upsertBlock", () => {

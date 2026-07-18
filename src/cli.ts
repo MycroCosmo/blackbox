@@ -1,11 +1,10 @@
 #!/usr/bin/env node
-import fs from "node:fs";
-import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Command } from "commander";
 import { runClaudeHook } from "./claude-hook.js";
 import { startCollector } from "./collector-server.js";
 import { loadConfig } from "./config.js";
+import { runDevSession } from "./dev-session.js";
 import { runMcpServer } from "./mcp-server.js";
 import { replayRequest } from "./replay.js";
 import { setPinned, setStatus } from "./incident.js";
@@ -32,7 +31,7 @@ const program = new Command();
 program
   .name("dev-blackbox")
   .description("Local flight recorder for AI coding agents")
-  .version("0.1.0")
+  .version("0.2.0")
   .enablePositionalOptions();
 
 function ctx() {
@@ -65,11 +64,18 @@ function incidentSummary(i: IncidentRecord) {
 // ---------------------------------------------------------------- init
 program
   .command("init")
-  .description("Set up .dev-blackbox and insert agent usage rules into CLAUDE.md")
+  .description("Set up .dev-blackbox, agent rules, and optional automatic dev-script wrapping")
   .option("--agent-files", "also insert the rules block into detected .cursorrules / AGENTS.md")
-  .option("--hooks <agent>", "register agent hooks (claude-code) [not yet implemented]")
-  .action((opts: { agentFiles?: boolean; hooks?: string }) => {
-    const result = runInit(process.cwd(), { agentFiles: opts.agentFiles, hooks: opts.hooks });
+  .option("--hooks <agent>", "register agent hooks (claude-code)")
+  .option("--auto", "wrap an npm script so it starts the app, collector, and recorder together")
+  .option("--script <name>", "npm script to wrap with --auto", "dev")
+  .action((opts: { agentFiles?: boolean; hooks?: string; auto?: boolean; script: string }) => {
+    const result = runInit(process.cwd(), {
+      agentFiles: opts.agentFiles,
+      hooks: opts.hooks,
+      auto: opts.auto,
+      script: opts.script,
+    });
     const lines = [
       result.createdDir ? "✓ Created .dev-blackbox/" : "· .dev-blackbox/ already exists",
       result.createdConfig ? "✓ Created .dev-blackbox/config.yml" : "· config.yml already exists",
@@ -91,7 +97,35 @@ program
     } else if (opts.hooks) {
       lines.push(`· --hooks ${opts.hooks}: unsupported (only claude-code is available)`);
     }
+    if (result.scriptWrap) {
+      const mark = result.scriptWrap.status === "wrapped" ? "✓" : "·";
+      lines.push(`${mark} ${result.scriptWrap.message}`);
+      if (result.scriptWrap.status === "wrapped") {
+        lines.push(
+          `  Preserved original command as '${result.scriptWrap.originalScript}'. Run: npm run ${result.scriptWrap.script}`,
+        );
+      }
+    }
     console.log(lines.join("\n"));
+  });
+
+// ---------------------------------------------------------------- dev
+program
+  .command("dev")
+  .description("Run a development command with the recorder and network collector attached")
+  .passThroughOptions()
+  .option("--port <port>", "collector port (default: config collector.port, 4319)")
+  .argument("<command...>", "development command to execute")
+  .action(async (commandArgs: string[], opts: { port?: string }) => {
+    const { storage, config } = ctx();
+    const argv = commandArgs[0] === "--" ? commandArgs.slice(1) : commandArgs;
+    const outcome = await runDevSession(argv, {
+      cwd: process.cwd(),
+      storage,
+      config,
+      port: opts.port ? Number(opts.port) : undefined,
+    });
+    process.exit(outcome.exitCode);
   });
 
 // ---------------------------------------------------------------- run
@@ -389,9 +423,9 @@ report
       const since = Date.now() - ms;
       events = events.filter((e) => Date.parse(e.receivedAt) >= since);
     }
-    storage.ensureDirs();
-    const file = path.join(storage.root, "reports", "NETWORK.md");
-    fs.writeFileSync(file, renderNetworkReport(events, { lang: config.reportLanguage }), "utf8");
+    const file = storage.writeNetworkSummary(
+      renderNetworkReport(events, { lang: config.reportLanguage }),
+    );
     console.log(file);
   });
 
@@ -547,7 +581,8 @@ storageCmd
     console.log(
       `Pruned: ${result.removedSessionFiles} session file(s), ${result.removedIncidents} incident(s), ` +
         `${result.removedBlobs} blob(s), ${result.removedNetworkEvents} network event(s), ` +
-        `${result.strippedNetworkBodies} network body(ies) stripped.`,
+        `${result.strippedNetworkBodies} network body(ies) stripped, ` +
+        `${result.removedReports} stale report(s) removed.`,
     );
   });
 

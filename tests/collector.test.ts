@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { startCollector, type Collector } from "../src/collector-server.js";
 import { DEFAULT_CONFIG } from "../src/config.js";
+import { setStatus } from "../src/incident.js";
 import { renderNetworkReport } from "../src/network-report.js";
 import { prune } from "../src/retention.js";
 import { Storage } from "../src/storage.js";
@@ -55,6 +56,16 @@ describe("collector server", () => {
     expect(stored).toHaveLength(2);
     expect(stored[0]!.classification).toBe("http_error");
     expect(stored[0]!.sessionId).toBe(collector.sessionId);
+  });
+
+  it("automatically regenerates incident and network Markdown views", async () => {
+    const response = await (await post(event())).json() as { requestId: string; incidentId: string };
+    expect(fs.existsSync(storage.networkSummaryFile)).toBe(true);
+    expect(fs.readFileSync(storage.networkSummaryFile, "utf8")).toContain("Failed: 1");
+    const requestReport = path.join(storage.networkReportsDir, `${response.requestId}.md`);
+    expect(fs.readFileSync(requestReport, "utf8")).toContain(response.incidentId);
+    const incidentReport = path.join(storage.reportsDir, `${response.incidentId}.md`);
+    expect(fs.readFileSync(incidentReport, "utf8")).toContain(response.requestId);
   });
 
   it("rejects invalid payloads without crashing", async () => {
@@ -173,8 +184,10 @@ describe("network retention (spec 7.2)", () => {
     await post(event({ response: { status: 200, body: { ok: true } } })); // success
     await collector.close(); // session ends
 
+    // Collector shutdown now runs retention automatically, so the explicit
+    // prune is idempotent and has nothing left to strip.
     const result = prune(storage, DEFAULT_CONFIG);
-    expect(result.strippedNetworkBodies).toBe(1);
+    expect(result.strippedNetworkBodies).toBe(0);
     const [fail, ok] = storage.readNetwork();
     expect(fail!.responseBody).toBeDefined();
     expect(ok!.responseBody).toBeUndefined();
@@ -193,6 +206,28 @@ describe("network retention (spec 7.2)", () => {
     const result = prune(storage, DEFAULT_CONFIG, { now: new Date("2026-07-14") });
     expect(result.removedNetworkEvents).toBe(1);
     expect(storage.readNetwork().map((e) => e.classification)).toEqual(["http_error"]);
+    collector = await startCollector({ storage, config: DEFAULT_CONFIG, port: 0 });
+  });
+
+  it("removes reports and linked network data after an incident is resolved and expires", async () => {
+    const created = await (await post(event())).json() as { requestId: string; incidentId: string };
+    await collector.close();
+    setStatus(storage, created.incidentId, "resolved");
+    storage.compactIncidents(
+      storage.readIncidents().map((incident) => ({
+        ...incident,
+        lastSeenAt: "2026-01-01T00:00:00.000Z",
+      })),
+    );
+
+    const result = prune(storage, DEFAULT_CONFIG, { now: new Date("2026-07-14") });
+    expect(result.removedIncidents).toBe(1);
+    expect(result.removedNetworkEvents).toBe(1);
+    expect(result.removedReports).toBe(2);
+    expect(storage.readNetwork()).toHaveLength(0);
+    expect(fs.existsSync(path.join(storage.reportsDir, `${created.incidentId}.md`))).toBe(false);
+    expect(fs.existsSync(path.join(storage.networkReportsDir, `${created.requestId}.md`))).toBe(false);
+    expect(fs.readFileSync(storage.networkSummaryFile, "utf8")).toContain("Total requests: 0");
     collector = await startCollector({ storage, config: DEFAULT_CONFIG, port: 0 });
   });
 });

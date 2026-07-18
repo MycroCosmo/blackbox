@@ -3,6 +3,9 @@ import type { BlackboxConfig } from "./config.js";
 import { loadContracts } from "./contracts.js";
 import { recordNetworkFailure } from "./incident.js";
 import { buildNetworkRecord, isFailure, shouldStore } from "./network.js";
+import { renderNetworkFailureReport, renderNetworkReport } from "./network-report.js";
+import { writeIncidentReport } from "./report.js";
+import { prune } from "./retention.js";
 import { Redactor } from "./security.js";
 import type { Storage } from "./storage.js";
 
@@ -30,6 +33,20 @@ export function startCollector(opts: {
   const sessionId = `SESSION-${storage.newSessionId()}`;
   let seq = storage.nextRequestSeq();
   const contracts = loadContracts(storage);
+  try {
+    prune(storage, config);
+  } catch {
+    /* retention must never prevent collection */
+  }
+  const pruneEveryMs = Math.max(1, config.retention.autoPruneIntervalHours) * 60 * 60 * 1000;
+  const pruneTimer = setInterval(() => {
+    try {
+      prune(storage, config);
+    } catch {
+      /* best-effort background maintenance */
+    }
+  }, pruneEveryMs);
+  pruneTimer.unref();
 
   const server = http.createServer((req, res) => {
     const send = (status: number, body: unknown) => {
@@ -85,6 +102,22 @@ export function startCollector(opts: {
           }
         }
         storage.appendNetwork(record);
+        try {
+          if (isFailure(record.classification)) {
+            storage.writeNetworkEventReport(
+              record.requestId,
+              renderNetworkFailureReport(record),
+            );
+            if (record.incidentId) {
+              writeIncidentReport(storage, record.incidentId, config.reportLanguage);
+            }
+          }
+          storage.writeNetworkSummary(
+            renderNetworkReport(storage.readNetwork(), { lang: config.reportLanguage }),
+          );
+        } catch {
+          /* reports are regenerated views; persistence above is authoritative */
+        }
         seq = { ...seq, next: seq.next + 1 };
         send(201, {
           ok: true,
@@ -120,8 +153,16 @@ export function startCollector(opts: {
         sessionId,
         close: () =>
           new Promise<void>((res) => {
+            clearInterval(pruneTimer);
             storage.removeCollectorLock();
-            server.close(() => res());
+            server.close(() => {
+              try {
+                prune(storage, config);
+              } catch {
+                /* best-effort shutdown maintenance */
+              }
+              res();
+            });
           }),
       });
     });

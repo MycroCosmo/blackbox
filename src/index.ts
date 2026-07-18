@@ -22,7 +22,15 @@ export {
   type ContractMismatch,
   type JsonSchema,
 } from "./contracts.js";
-export { instructionBlock, runInit, setupClaudeCodeHook, upsertBlock } from "./init.js";
+export {
+  instructionBlock,
+  runInit,
+  setupClaudeCodeHook,
+  upsertBlock,
+  wrapPackageScript,
+  type ScriptWrapResult,
+} from "./init.js";
+export { buildInstrumentedEnv, runDevSession, type DevSessionOptions } from "./dev-session.js";
 export { createMcpTools, runMcpServer } from "./mcp-server.js";
 export { diffValues, replayRequest, type ReplayResult } from "./replay.js";
 export {
@@ -37,7 +45,7 @@ export {
   type NetworkEventInput,
   type NetworkRecord,
 } from "./network.js";
-export { renderNetworkReport } from "./network-report.js";
+export { renderNetworkFailureReport, renderNetworkReport } from "./network-report.js";
 export {
   listProcesses,
   readProcessLogs,

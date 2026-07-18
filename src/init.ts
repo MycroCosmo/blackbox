@@ -17,12 +17,15 @@ export function instructionBlock(): string {
     BLOCK_START,
     "## Dev Blackbox usage rules",
     "",
+    "- At the start of a bug-fix task, inspect existing evidence with `npx dev-blackbox incident list --format json` and `npx dev-blackbox network list --failed --format json`.",
     "- Always run build, test, and execution commands through `npx dev-blackbox run -- <command>`.",
     "- When a command fails, an Incident ID is printed. Inspect it with `npx dev-blackbox incident show <ID> --format json` instead of re-reading raw logs.",
     "- If the same error repeats, check the existing incident's occurrence history first (`npx dev-blackbox incident list --format json`) instead of re-analyzing from scratch.",
     "- After fixing an error, re-run the same command; a success marks the incident as a resolve candidate. Confirm with `npx dev-blackbox incident resolve <ID>`.",
-    "- Long-running dev servers: start them with `npx dev-blackbox start --name <name> -- <command>` and inspect with `npx dev-blackbox process list/logs/stop`.",
-    "- To record frontend/backend HTTP traffic, run `npx dev-blackbox collect` and add a small interceptor that POSTs events to `http://127.0.0.1:4319/events/network` (see the snippets in the dev-blackbox `examples/` docs). Propagate the `X-Dev-Blackbox-Trace-Id` header to link frontend and backend events.",
+    "- When `init --auto` wrapped the project dev script, use the normal `npm run dev`; it starts the recorder and collector together.",
+    "- Node.js `fetch` calls are auto-instrumented in attached dev sessions. Browser traffic still needs the fetch/Axios interceptor from the dev-blackbox examples.",
+    "- If recorded evidence is insufficient, inspect source code, raw logs, and reproduce the failure; do not guess from a report alone.",
+    "- Long-running detached services can still use `npx dev-blackbox start --name <name> -- <command>` and `process list/logs/stop`.",
     "- Never replay non-idempotent requests without explicit user confirmation.",
     BLOCK_END,
   ].join("\n");
@@ -35,6 +38,14 @@ export interface InitResult {
   updatedInstructionFiles: string[];
   detectedAgentFiles: string[];
   hooksConfigured: boolean;
+  scriptWrap?: ScriptWrapResult;
+}
+
+export interface ScriptWrapResult {
+  script: string;
+  originalScript: string;
+  status: "wrapped" | "already_wrapped" | "skipped";
+  message: string;
 }
 
 /** Inserts or replaces the instruction block; returns the new content. */
@@ -50,7 +61,7 @@ export function upsertBlock(content: string, block: string): string {
 
 export function runInit(
   projectDir: string,
-  opts: { agentFiles?: boolean; hooks?: string } = {},
+  opts: { agentFiles?: boolean; hooks?: string; auto?: boolean; script?: string } = {},
 ): InitResult {
   const result: InitResult = {
     createdDir: false,
@@ -94,11 +105,16 @@ export function runInit(
 
   // 4. Other agent instruction files — detected always, modified only on opt-in
   //    (spec: 사용자 확인 후 → CLI flag --agent-files).
+  if (opts.auto && !fs.existsSync(path.join(projectDir, "AGENTS.md"))) {
+    fs.writeFileSync(path.join(projectDir, "AGENTS.md"), block + "\n", "utf8");
+    result.detectedAgentFiles.push("AGENTS.md");
+    result.updatedInstructionFiles.push("AGENTS.md");
+  }
   for (const name of [".cursorrules", "AGENTS.md", ".windsurfrules"]) {
     const file = path.join(projectDir, name);
     if (!fs.existsSync(file)) continue;
-    result.detectedAgentFiles.push(name);
-    if (opts.agentFiles) {
+    if (!result.detectedAgentFiles.includes(name)) result.detectedAgentFiles.push(name);
+    if ((opts.agentFiles || opts.auto) && !result.updatedInstructionFiles.includes(name)) {
       fs.writeFileSync(file, upsertBlock(fs.readFileSync(file, "utf8"), block), "utf8");
       result.updatedInstructionFiles.push(name);
     }
@@ -109,7 +125,52 @@ export function runInit(
     result.hooksConfigured = setupClaudeCodeHook(projectDir);
   }
 
+  if (opts.auto) {
+    result.scriptWrap = wrapPackageScript(projectDir, opts.script ?? "dev");
+  }
+
   return result;
+}
+
+/** Rewrites one package.json script through the attached `dev` runner while
+ * preserving the original command under `<script>:original`. Never overwrites
+ * an existing backup with different content. */
+export function wrapPackageScript(projectDir: string, script = "dev"): ScriptWrapResult {
+  if (!/^[A-Za-z0-9:_-]+$/.test(script)) {
+    return { script, originalScript: `${script}:original`, status: "skipped", message: "invalid script name" };
+  }
+  const packageFile = path.join(projectDir, "package.json");
+  let parsed: { scripts?: Record<string, unknown>; [key: string]: unknown };
+  let raw: string;
+  try {
+    raw = fs.readFileSync(packageFile, "utf8");
+    parsed = JSON.parse(raw) as typeof parsed;
+  } catch {
+    return { script, originalScript: `${script}:original`, status: "skipped", message: "package.json not found or invalid" };
+  }
+  const scripts = (parsed.scripts ??= {});
+  const originalScript = `${script}:original`;
+  const wrapper = `dev-blackbox dev -- npm run ${originalScript}`;
+  if (scripts[script] === wrapper && typeof scripts[originalScript] === "string") {
+    return { script, originalScript, status: "already_wrapped", message: `${script} is already wrapped` };
+  }
+  if (typeof scripts[script] !== "string" || scripts[script].trim() === "") {
+    return { script, originalScript, status: "skipped", message: `script '${script}' does not exist` };
+  }
+  if (originalScript in scripts) {
+    return {
+      script,
+      originalScript,
+      status: "skipped",
+      message: `backup script '${originalScript}' already exists; no changes made`,
+    };
+  }
+  scripts[originalScript] = scripts[script];
+  scripts[script] = wrapper;
+  const indent = /^([ \t]+)"/.exec(raw.split(/\r?\n/)[1] ?? "")?.[1] ?? "  ";
+  const trailingNewline = raw.endsWith("\n") ? "\n" : "";
+  fs.writeFileSync(packageFile, JSON.stringify(parsed, null, indent) + trailingNewline, "utf8");
+  return { script, originalScript, status: "wrapped", message: `${script} now starts Dev Blackbox automatically` };
 }
 
 const HOOK_COMMAND = "npx dev-blackbox claude-hook";

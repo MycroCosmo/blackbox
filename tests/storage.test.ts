@@ -109,6 +109,41 @@ describe("prune", () => {
     expect(remaining).toEqual([open.incidentId]);
   });
 
+  it("removes stale Markdown views with their expired records", () => {
+    const incident = recordFailure(storage, { ...failure, now: new Date("2026-01-01") });
+    storage.writeReport(incident.incidentId, "stale incident report");
+    setStatus(storage, incident.incidentId, "resolved");
+    storage.compactIncidents(
+      storage.readIncidents().map((item) => ({
+        ...item,
+        lastSeenAt: "2026-01-01T00:00:00.000Z",
+      })),
+    );
+    const result = prune(storage, DEFAULT_CONFIG, { now: new Date("2026-07-13") });
+    expect(result.removedIncidents).toBe(1);
+    expect(result.removedReports).toBe(1);
+    expect(fs.existsSync(path.join(storage.reportsDir, `${incident.incidentId}.md`))).toBe(false);
+  });
+
+  it("enforces the size cap using disposable session records first", () => {
+    storage.appendCommand({
+      schemaVersion: SCHEMA_VERSION,
+      sessionId: "oversized",
+      command: "npm test",
+      cwd: dir,
+      startedAt: new Date().toISOString(),
+      endedAt: new Date().toISOString(),
+      durationMs: 1,
+      exitCode: 0,
+      signal: null,
+      timedOut: false,
+    });
+    const config = { ...DEFAULT_CONFIG, storage: { maxTotalSizeMB: 0 } };
+    const result = prune(storage, config);
+    expect(result.removedSessionFiles).toBe(1);
+    expect(storage.readCommands()).toHaveLength(0);
+  });
+
   it("removes orphaned blobs", () => {
     storage.ensureDirs();
     fs.writeFileSync(path.join(storage.blobsDir, "orphan-1.log.gz"), "x");

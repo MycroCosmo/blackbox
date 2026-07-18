@@ -51,6 +51,12 @@ export class Storage {
   get reportsDir(): string {
     return path.join(this.root, "reports", "incidents");
   }
+  get networkReportsDir(): string {
+    return path.join(this.root, "reports", "network");
+  }
+  get networkSummaryFile(): string {
+    return path.join(this.root, "reports", "NETWORK.md");
+  }
   get networkFile(): string {
     return path.join(this.root, "network.jsonl");
   }
@@ -65,7 +71,14 @@ export class Storage {
   }
 
   ensureDirs(): void {
-    for (const d of [this.root, this.sessionsDir, this.blobsDir, this.reportsDir, this.processesDir]) {
+    for (const d of [
+      this.root,
+      this.sessionsDir,
+      this.blobsDir,
+      this.reportsDir,
+      this.networkReportsDir,
+      this.processesDir,
+    ]) {
       fs.mkdirSync(d, { recursive: true });
     }
   }
@@ -262,6 +275,19 @@ export class Storage {
   writeReport(incidentId: string, markdown: string): string {
     this.ensureDirs();
     const file = path.join(this.reportsDir, `${incidentId}.md`);
+    fs.writeFileSync(file, markdown, "utf8");
+    return file;
+  }
+
+  writeNetworkSummary(markdown: string): string {
+    this.ensureDirs();
+    fs.writeFileSync(this.networkSummaryFile, markdown, "utf8");
+    return this.networkSummaryFile;
+  }
+
+  writeNetworkEventReport(requestId: string, markdown: string): string {
+    this.ensureDirs();
+    const file = path.join(this.networkReportsDir, `${requestId}.md`);
     fs.writeFileSync(file, markdown, "utf8");
     return file;
   }
