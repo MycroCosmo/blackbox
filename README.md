@@ -199,6 +199,25 @@ The MCP server exposes command, incident, network, replay, and report tools.
 The optional Claude Code `PreToolUse` hook redirects unwrapped build and test
 commands through Dev Blackbox.
 
+## Engineering evidence
+
+- Incident updates and retention use atomic `wx` lock files with stale-owner
+  detection. Tests start real child processes to verify cross-process incident
+  merging and concurrent compaction.
+- Command arguments, stream lines, headers, URL queries, configured body keys,
+  and private-key blocks are redacted before persistence.
+- Replay is safe by default: only idempotent methods are allowed, external or
+  non-HTTP targets are rejected, and redirect destinations are checked again.
+- The ring buffer is bounded by line count, age, and UTF-8 byte size. A stream
+  without newlines is split into bounded fragments so one unterminated line
+  cannot grow recorder memory indefinitely.
+- JSONL is the source of truth; corrupt lines are skipped and Markdown reports
+  are reproducible views.
+
+The repository does not claim production traffic results or benchmark gains.
+Its verifiable scope is local process/network recording, failure evidence,
+cross-process file coordination, and safe replay.
+
 ## Development
 
 ```bash
