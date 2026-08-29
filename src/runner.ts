@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
+import { StringDecoder } from "node:string_decoder";
 import stripAnsi from "strip-ansi";
 import type { BlackboxConfig } from "./config.js";
 import { detectSoftSignals } from "./detection.js";
@@ -36,15 +37,24 @@ export interface RunOptions {
   env?: NodeJS.ProcessEnv;
 }
 
-/** Incrementally splits a byte stream into lines. */
-class LineSplitter {
+const MAX_UNTERMINATED_LINE_CHARS = 64 * 1024;
+
+/** Incrementally splits a byte stream into bounded lines. */
+export class LineSplitter {
   private tail = "";
+  private readonly decoder = new StringDecoder("utf8");
+
   push(chunk: Buffer): string[] {
-    const parts = (this.tail + chunk.toString("utf8")).split(/\r?\n/);
+    const parts = (this.tail + this.decoder.write(chunk)).split(/\r?\n/);
     this.tail = parts.pop() ?? "";
+    while (this.tail.length > MAX_UNTERMINATED_LINE_CHARS) {
+      parts.push(this.tail.slice(0, MAX_UNTERMINATED_LINE_CHARS));
+      this.tail = this.tail.slice(MAX_UNTERMINATED_LINE_CHARS);
+    }
     return parts;
   }
   flush(): string[] {
+    this.tail += this.decoder.end();
     if (this.tail === "") return [];
     const rest = this.tail;
     this.tail = "";

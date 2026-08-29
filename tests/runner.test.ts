@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_CONFIG } from "../src/config.js";
-import { runCommand } from "../src/runner.js";
+import { LineSplitter, runCommand } from "../src/runner.js";
 import { Storage } from "../src/storage.js";
 
 /** Integration tests: spawn real node child processes in a temp directory
@@ -119,6 +119,15 @@ describe("timeout handling", () => {
 });
 
 describe("large output (spec 15: 대량 stdout)", () => {
+  it("bounds an unterminated line instead of retaining the whole stream", () => {
+    const splitter = new LineSplitter();
+    const fragments = splitter.push(Buffer.alloc(8 * 1024 * 1024, "x"));
+    const tail = splitter.flush();
+
+    expect(fragments.length).toBeGreaterThan(100);
+    expect([...fragments, ...tail].every((line) => line.length <= 64 * 1024)).toBe(true);
+  });
+
   it("survives megabytes of output and keeps only the ring buffer tail", async () => {
     const outcome = await run([
       node,

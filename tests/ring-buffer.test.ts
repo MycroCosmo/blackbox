@@ -23,4 +23,11 @@ describe("RingBuffer", () => {
     for (let i = 0; i < 100; i++) buf.push(big, "stdout");
     expect(buf.size).toBeLessThan(20);
   });
+
+  it("counts UTF-8 bytes instead of characters for multibyte logs", () => {
+    const buf = new RingBuffer({ maxLines: 1_000_000, maxAgeSeconds: 3600, maxMemoryMB: 1 });
+    const multibyte = "한".repeat(32 * 1024);
+    for (let i = 0; i < 100; i++) buf.push(multibyte, "stdout");
+    expect(buf.size).toBeLessThan(12);
+  });
 });

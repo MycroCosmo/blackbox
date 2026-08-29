@@ -25,7 +25,7 @@ export class RingBuffer {
 
   push(text: string, stream: "stdout" | "stderr", at = Date.now()): void {
     this.lines.push({ text, at, stream });
-    this.bytes += text.length + 16;
+    this.bytes += lineBytes(text);
     this.evict(at);
   }
 
@@ -38,7 +38,7 @@ export class RingBuffer {
         this.lines[0]!.at < minAt)
     ) {
       const dropped = this.lines.shift()!;
-      this.bytes -= dropped.text.length + 16;
+      this.bytes -= lineBytes(dropped.text);
     }
   }
 
@@ -50,4 +50,8 @@ export class RingBuffer {
   get size(): number {
     return this.lines.length;
   }
+}
+
+function lineBytes(text: string): number {
+  return Buffer.byteLength(text, "utf8") + 16;
 }
