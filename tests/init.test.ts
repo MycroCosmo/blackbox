@@ -27,6 +27,15 @@ describe("runInit", () => {
     expect(claude).toMatch(/`(?:npx )?dev-blackbox run -- <command>`/);
   });
 
+  it("does not ask for bookkeeping turns (unconditional incident list, manual resolve)", () => {
+    runInit(dir);
+    const claude = fs.readFileSync(path.join(dir, "CLAUDE.md"), "utf8");
+    expect(claude).toMatch(/incident list.*only when the summary is not enough or the task refers to earlier failures/);
+    expect(claude).toContain("do not pipe it through `tail`");
+    expect(claude).not.toContain("At the start of a bug-fix task");
+    expect(claude).not.toContain("incident resolve");
+  });
+
   it("writes the command that matches how dev-blackbox is installed", () => {
     runInit(dir, { install: "local" });
     expect(fs.readFileSync(path.join(dir, "CLAUDE.md"), "utf8")).toContain("`npx dev-blackbox run -- <command>`");

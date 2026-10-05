@@ -19,6 +19,7 @@ import {
 } from "./process-manager.js";
 import { renderIncidentReport } from "./report.js";
 import { formatBytes, prune, storageStatus } from "./retention.js";
+import { resolveOutputMode } from "./condense.js";
 import { runCommand } from "./runner.js";
 import { Storage } from "./storage.js";
 import { SCHEMA_VERSION, type IncidentRecord } from "./types.js";
@@ -143,8 +144,10 @@ program
   .description("Run a command through the blackbox: dev-blackbox run -- <command> [args...]")
   .passThroughOptions()
   .option("--timeout <seconds>", "kill the command after N seconds (records a TIMEOUT incident)")
+  .option("--compact", "print condensed output when the command ends (default inside Claude Code)")
+  .option("--full", "stream the full output, even inside an AI agent")
   .argument("<command...>", "command to execute")
-  .action(async (commandArgs: string[], opts: { timeout?: string }) => {
+  .action(async (commandArgs: string[], opts: { timeout?: string; compact?: boolean; full?: boolean }) => {
     const { storage, config } = ctx();
     // Rejected rather than coerced: `--timeout abc` produced NaN, which is
     // falsy, so the timeout was silently dropped instead of reported.
@@ -154,6 +157,7 @@ program
       config,
       storage,
       timeoutMs,
+      output: resolveOutputMode(opts, process.env),
     });
     process.exit(outcome.exitCode);
   });

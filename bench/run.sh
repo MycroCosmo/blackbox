@@ -30,7 +30,7 @@ REPO_DIR="$(cd "$BENCH_DIR/.." && pwd)"
 RESULTS_DIR="$BENCH_DIR/results"
 RAW_DIR="$RESULTS_DIR/raw"
 
-TASKS="${TASKS:-a-npe-dto-mapping b-gradle-noisy-log c-vitest-shared-state}"
+TASKS="${TASKS:-a-npe-dto-mapping b-gradle-noisy-log c-vitest-shared-state d-buried-cause-pipeline}"
 CONDITIONS="${CONDITIONS:-A C}"
 TRIALS="${TRIALS:-3}"
 MODEL="${MODEL:-}"

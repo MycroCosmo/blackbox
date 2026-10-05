@@ -11,6 +11,7 @@ import { autoPrune } from "./retention.js";
 import { RingBuffer, type BufferedLine } from "./ring-buffer.js";
 import { Redactor } from "./security.js";
 import type { Storage } from "./storage.js";
+import { condenseOutput, type OutputMode } from "./condense.js";
 import { formatFailureSummary } from "./summary.js";
 import { SCHEMA_VERSION, type IncidentRecord, type RunOutcome } from "./types.js";
 import { takeWorkspaceSnapshot, type WorkspaceSnapshot } from "./workspace.js";
@@ -38,7 +39,13 @@ export interface RunOptions {
   stdin?: "inherit" | "ignore";
   /** Environment for the child process. Defaults to the current environment. */
   env?: NodeJS.ProcessEnv;
+  /** "compact" holds the output back and prints a condensed version when the
+   *  command ends (see condense.ts). Defaults to "full" streaming. */
+  output?: OutputMode;
 }
+
+/** Compact mode keeps at most this many lines for last-run.log. */
+const COMPACT_MAX_LINES = 20_000;
 
 /** Incrementally splits a byte stream into lines. */
 class LineSplitter {
@@ -130,32 +137,38 @@ export async function runCommand(argv: string[], opts: RunOptions): Promise<RunO
   // Sees every line, including the ones the ring buffer later evicts.
   const rootCauseTracker = new RootCauseTracker();
   const startedAt = new Date();
+  const compact = opts.output === "compact" && !opts.quiet;
+  // Compact mode only: every line, in arrival order, for condensing and for
+  // last-run.log. `compactDropped` counts lines trimmed from the front.
+  const allLines: string[] = [];
+  let compactDropped = 0;
 
   const capture = (stream: "stdout" | "stderr") => {
     const splitter = new LineSplitter();
     const redactor = streamRedactors[stream];
+    const take = (line: string) => {
+      const redacted = redactor.redactStreamLine(stripAnsi(line));
+      buffer.push(redacted, stream);
+      rootCauseTracker.push(redacted);
+      if (stream === "stderr") {
+        stderrTail.push(redacted);
+        if (stderrTail.length > 200) stderrTail.shift();
+      }
+      if (compact) {
+        allLines.push(redacted);
+        if (allLines.length > COMPACT_MAX_LINES) {
+          const drop = COMPACT_MAX_LINES / 4;
+          allLines.splice(0, drop);
+          compactDropped += drop;
+        }
+      }
+    };
     return {
       data: (chunk: Buffer) => {
-        for (const line of splitter.push(chunk)) {
-          const redacted = redactor.redactStreamLine(stripAnsi(line));
-          buffer.push(redacted, stream);
-          rootCauseTracker.push(redacted);
-          if (stream === "stderr") {
-            stderrTail.push(redacted);
-            if (stderrTail.length > 200) stderrTail.shift();
-          }
-        }
+        for (const line of splitter.push(chunk)) take(line);
       },
       flush: () => {
-        for (const line of splitter.flush()) {
-          const redacted = redactor.redactStreamLine(stripAnsi(line));
-          buffer.push(redacted, stream);
-          rootCauseTracker.push(redacted);
-          if (stream === "stderr") {
-            stderrTail.push(redacted);
-            if (stderrTail.length > 200) stderrTail.shift();
-          }
-        }
+        for (const line of splitter.flush()) take(line);
       },
     };
   };
@@ -222,7 +235,7 @@ export async function runCommand(argv: string[], opts: RunOptions): Promise<RunO
     const attach = (c: ChildProcess) => {
       c.stdout?.on("data", (d: Buffer) => {
         if (c !== child) return;
-        if (!opts.quiet) process.stdout.write(d);
+        if (!opts.quiet && !compact) process.stdout.write(d);
         try {
           out.data(d);
         } catch {
@@ -231,7 +244,7 @@ export async function runCommand(argv: string[], opts: RunOptions): Promise<RunO
       });
       c.stderr?.on("data", (d: Buffer) => {
         if (c !== child) return;
-        if (!opts.quiet) process.stderr.write(d);
+        if (!opts.quiet && !compact) process.stderr.write(d);
         try {
           err.data(d);
         } catch {
@@ -288,6 +301,33 @@ export async function runCommand(argv: string[], opts: RunOptions): Promise<RunO
   let reportPath: string | undefined;
   let failedIncident: IncidentRecord | undefined;
 
+  if (compact) {
+    if (result.spawnError) allLines.push(`spawn error: ${result.spawnError.message}`);
+    let fullLogPath: string | undefined;
+    try {
+      const file = `${storage.root}/last-run.log`;
+      fs.mkdirSync(storage.root, { recursive: true });
+      fs.writeFileSync(file, allLines.length ? `${allLines.join("\n")}\n` : "", "utf8");
+      fullLogPath = relForDisplay(file, cwd);
+    } catch {
+      /* the excerpt still prints; only the pointer is lost */
+    }
+    try {
+      const rc = failed ? rootCauseTracker.result() : undefined;
+      process.stdout.write(
+        condenseOutput({
+          lines: allLines,
+          failed,
+          rootCauseIdx: rc ? rc.outputLine - 1 - compactDropped : undefined,
+          fullLogPath,
+        }),
+      );
+    } catch {
+      /* never let condensing hide the result: fall back to the raw tail */
+      process.stdout.write(`${allLines.slice(-50).join("\n")}\n`);
+    }
+  }
+
   // Everything below is recording; a recorder bug must not change the
   // child's outcome, so it is wrapped as a whole.
   try {
@@ -341,8 +381,8 @@ export async function runCommand(argv: string[], opts: RunOptions): Promise<RunO
       const marked = markResolveCandidates(storage, commandString, cwd);
       if (marked.length > 0 && !opts.quiet) {
         process.stderr.write(
-          `\n✓ Command succeeded — resolve candidate: ${marked.map((m) => m.incidentId).join(", ")}\n` +
-            `  Verify and run: npx dev-blackbox incident resolve <ID>\n`,
+          `\n✓ Command succeeded — resolve candidate: ${marked.map((m) => m.incidentId).join(", ")}` +
+            ` (reopens automatically if the failure returns)\n`,
         );
       }
     }

@@ -105,6 +105,31 @@ describe("resolve candidate flow", () => {
     const passing = await run([node, "flaky.js"]);
     expect(passing.exitCode).toBe(0);
     expect(storage.findIncident(failing.incidentId!)?.status).toBe("resolve_candidate");
+    const stderr = vi.mocked(process.stderr.write).mock.calls.map((c) => String(c[0])).join("");
+    expect(stderr).toContain(`resolve candidate: ${failing.incidentId}`);
+    expect(stderr).not.toContain("incident resolve");
+  });
+});
+
+describe("compact output", () => {
+  it("prints a condensed excerpt instead of the raw stream and saves the full output", async () => {
+    fs.writeFileSync(
+      path.join(dir, "noisy.js"),
+      "for (let i = 0; i < 500; i++) console.log(`INFO [main] starting component ${i}`);" +
+        "console.error('Error: vat-rate must be a number');" +
+        "process.exit(1);",
+      "utf8",
+    );
+    const outcome = await runCommand([node, "noisy.js"], {
+      cwd: dir, config: DEFAULT_CONFIG, storage, output: "compact",
+    });
+    expect(outcome.exitCode).toBe(1);
+    const stdout = vi.mocked(process.stdout.write).mock.calls.map((c) => String(c[0])).join("");
+    expect(stdout).toContain("Error: vat-rate must be a number");
+    expect(stdout).not.toContain("starting component");
+    expect(stdout).toContain("last-run.log");
+    const full = fs.readFileSync(path.join(dir, ".dev-blackbox", "last-run.log"), "utf8");
+    expect(full.split("\n").filter(Boolean)).toHaveLength(501);
   });
 });
 
