@@ -7,7 +7,7 @@ import { loadConfig } from "./config.js";
 import { runDevSession } from "./dev-session.js";
 import { runMcpServer } from "./mcp-server.js";
 import { replayRequest } from "./replay.js";
-import { setPinned, setStatus } from "./incident.js";
+import { publicIncident, setPinned, setStatus } from "./incident.js";
 import { runInit } from "./init.js";
 import { renderNetworkReport } from "./network-report.js";
 import {
@@ -22,6 +22,7 @@ import { formatBytes, prune, storageStatus } from "./retention.js";
 import { runCommand } from "./runner.js";
 import { Storage } from "./storage.js";
 import { SCHEMA_VERSION, type IncidentRecord } from "./types.js";
+import { VERSION } from "./version.js";
 
 /** CLI (spec 9). Query commands support `--format json` with a stable,
  *  backward-compatible schema (spec 3.7). `run` propagates the child's exit
@@ -31,7 +32,7 @@ const program = new Command();
 program
   .name("dev-blackbox")
   .description("Local flight recorder for AI coding agents")
-  .version("0.2.1")
+  .version(VERSION)
   .enablePositionalOptions();
 
 function ctx() {
@@ -82,6 +83,14 @@ program
       result.gitignoreUpdated ? "✓ Added .dev-blackbox/ to .gitignore" : "· .gitignore already covers .dev-blackbox/",
       `✓ Instruction block upserted: ${result.updatedInstructionFiles.join(", ")}`,
     ];
+    if (result.install === "global") {
+      lines.push("· Using the global install: agent rules call `dev-blackbox` directly");
+    } else if (result.install === "npx") {
+      lines.push(
+        "· dev-blackbox is not installed, so agents will go through npx on every call.",
+        "  Install it for faster runs: npm i -D dev-blackbox (Node projects) or npm i -g dev-blackbox (any project).",
+      );
+    }
     const skipped = result.detectedAgentFiles.filter(
       (f) => !result.updatedInstructionFiles.includes(f),
     );
@@ -91,7 +100,7 @@ program
     if (opts.hooks === "claude-code") {
       lines.push(
         result.hooksConfigured
-          ? "✓ Claude Code PreToolUse hook registered in .claude/settings.json"
+          ? "✓ Claude Code PreToolUse hook registered in .claude/settings.json (build/test commands are routed through dev-blackbox run)"
           : "· Claude Code hook already registered",
       );
     } else if (opts.hooks) {
@@ -137,7 +146,9 @@ program
   .argument("<command...>", "command to execute")
   .action(async (commandArgs: string[], opts: { timeout?: string }) => {
     const { storage, config } = ctx();
-    const timeoutMs = opts.timeout ? Number(opts.timeout) * 1000 : undefined;
+    // Rejected rather than coerced: `--timeout abc` produced NaN, which is
+    // falsy, so the timeout was silently dropped instead of reported.
+    const timeoutMs = parsePositiveSeconds(opts.timeout, "--timeout");
     const outcome = await runCommand(commandArgs, {
       cwd: process.cwd(),
       config,
@@ -192,7 +203,7 @@ incident
     const log = inc.logBlob ? storage.readLogBlob(inc.logBlob) : undefined;
     const logTail = log ? log.split("\n").slice(-n) : [];
     if (opts.format === "json") {
-      printJson({ schemaVersion: SCHEMA_VERSION, incident: inc, logTail });
+      printJson({ schemaVersion: SCHEMA_VERSION, incident: publicIncident(inc), logTail });
       return;
     }
     console.log(renderIncidentReport(inc, config.reportLanguage));
@@ -538,6 +549,15 @@ function cliScriptPath(): string {
   return fileURLToPath(import.meta.url);
 }
 
+function parsePositiveSeconds(value: string | undefined, flag: string): number | undefined {
+  if (value === undefined) return undefined;
+  const seconds = Number(value);
+  if (!Number.isFinite(seconds) || seconds <= 0) {
+    throw new Error(`invalid ${flag} '${value}' (expected a positive number of seconds)`);
+  }
+  return seconds * 1000;
+}
+
 function parseWindow(window: string): number | undefined {
   const m = /^(\d+)(m|h|d)$/.exec(window.trim());
   if (!m) return undefined;
@@ -576,7 +596,15 @@ storageCmd
   .option("--older-than <days>", "override retention: remove eligible data older than N days")
   .action((opts: { olderThan?: string }) => {
     const { storage, config } = ctx();
-    const days = opts.olderThan ? Number(String(opts.olderThan).replace(/d$/i, "")) : undefined;
+    let days: number | undefined;
+    if (opts.olderThan !== undefined) {
+      days = Number(String(opts.olderThan).replace(/d$/i, ""));
+      if (!Number.isFinite(days) || days < 0) {
+        process.stderr.write(`Invalid --older-than: ${opts.olderThan} (expected days, e.g. 30 or 30d)\n`);
+        process.exitCode = 1;
+        return;
+      }
+    }
     const result = prune(storage, config, { olderThanDays: days });
     console.log(
       `Pruned: ${result.removedSessionFiles} session file(s), ${result.removedIncidents} incident(s), ` +

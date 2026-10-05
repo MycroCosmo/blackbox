@@ -1,11 +1,13 @@
 import readline from "node:readline";
 import type { BlackboxConfig } from "./config.js";
+import { publicIncident } from "./incident.js";
 import { renderNetworkReport } from "./network-report.js";
 import { renderIncidentReport } from "./report.js";
 import { replayRequest } from "./replay.js";
 import { runCommand } from "./runner.js";
 import type { Storage } from "./storage.js";
 import type { IncidentRecord } from "./types.js";
+import { VERSION } from "./version.js";
 
 /** MCP server (Phase 3, spec 16). Stdio transport: newline-delimited
  *  JSON-RPC 2.0. Implemented without an SDK dependency — the protocol
@@ -157,6 +159,8 @@ export function createMcpTools(storage: Storage, config: BlackboxConfig) {
             message: incident.message,
             occurrenceCount: incident.occurrenceCount,
             lastLocation: incident.lastLocation,
+            rootCause: incident.rootCause,
+            attempts: incident.attempts,
             facts: incident.facts,
           },
         };
@@ -182,13 +186,13 @@ export function createMcpTools(storage: Storage, config: BlackboxConfig) {
         if (!inc) throw new Error(`incident not found: ${args.incidentId}`);
         const n = typeof args.logLines === "number" ? args.logLines : 50;
         const log = inc.logBlob ? storage.readLogBlob(inc.logBlob) : undefined;
-        return { incident: inc, logTail: log ? log.split("\n").slice(-n) : [] };
+        return { incident: publicIncident(inc), logTail: log ? log.split("\n").slice(-n) : [] };
       }
       case "find_similar_incidents": {
         const query = tokenize(String(args.query ?? ""));
         const scored = storage
           .readIncidents()
-          .map((inc) => ({ score: Math.round(similarity(query, inc) * 100) / 100, incident: inc }))
+          .map((inc) => ({ score: Math.round(similarity(query, inc) * 100) / 100, incident: publicIncident(inc) }))
           .filter((s) => s.score > 0)
           .sort((a, b) => b.score - a.score)
           .slice(0, 5);
@@ -247,7 +251,9 @@ export function createMcpTools(storage: Storage, config: BlackboxConfig) {
           return { file, markdown };
         }
         if (args.type === "network") {
-          return { markdown: renderNetworkReport(storage.readNetwork(), { lang: config.reportLanguage }) };
+          const markdown = renderNetworkReport(storage.readNetwork(), { lang: config.reportLanguage });
+          const file = storage.writeNetworkSummary(markdown);
+          return { file, markdown };
         }
         throw new Error("type must be 'incident' or 'network'");
       }
@@ -296,7 +302,7 @@ export async function runMcpServer(storage: Storage, config: BlackboxConfig): Pr
             // falsely complete negotiation and can cause later incompatibility.
             protocolVersion: PROTOCOL_VERSION,
             capabilities: { tools: {} },
-            serverInfo: { name: "dev-blackbox", version: "0.1.0" },
+            serverInfo: { name: "dev-blackbox", version: VERSION },
           });
           break;
         case "ping":

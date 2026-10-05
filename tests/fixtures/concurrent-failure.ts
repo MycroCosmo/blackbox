@@ -11,7 +11,9 @@ while (!fs.existsSync(barrier)) {
   await new Promise((resolve) => setTimeout(resolve, 5));
 }
 
-recordFailure(new Storage(root), {
+const storage = new Storage(root);
+const t0 = Date.now();
+const incident = recordFailure(storage, {
   command,
   cwd: root,
   exitCode: 1,
@@ -19,3 +21,8 @@ recordFailure(new Storage(root), {
   timedOut: false,
   logText: `failure from ${workerId}`,
 });
+fs.appendFileSync(
+  `${root}/trace.log`,
+  `W${workerId} ${command} -> ${incident.incidentId}#${incident.occurrenceCount} waited=${Date.now() - t0}ms\n`,
+  "utf8",
+);

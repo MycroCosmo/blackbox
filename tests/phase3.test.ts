@@ -111,6 +111,13 @@ describe("network failure → incident linking (Phase 3)", () => {
     expect(inc.errorType).toBe("HTTP_500");
     expect(inc.occurrenceCount).toBe(2);
   });
+
+  it("keeps failures on different routes in separate incidents", async () => {
+    const charge = await post("/charge/42");
+    const refund = await post("/refund/42");
+    expect(refund.incidentId).not.toBe(charge.incidentId);
+    expect(storage.readIncidents()).toHaveLength(2);
+  });
 });
 
 // ------------------------------------------------------------ replay
@@ -337,6 +344,13 @@ describe("MCP tools (Phase 3)", () => {
       incidentId: result.incidentId,
     })) as { markdown: string };
     expect(report.markdown).toContain("TypeError");
+
+    const networkReport = (await call("generate_report", { type: "network" })) as {
+      file: string;
+      markdown: string;
+    };
+    expect(networkReport.file).toBe(storage.networkSummaryFile);
+    expect(fs.readFileSync(networkReport.file, "utf8")).toBe(networkReport.markdown);
   }, 20_000);
 
   it("accepts a UTF-8 BOM and negotiates MCP initialization", async () => {
@@ -538,28 +552,103 @@ describe("MCP tools (Phase 3)", () => {
 describe("claude-hook decision (spec 3.2 경로 2)", () => {
   const bash = (command: string) => ({ tool_name: "Bash", tool_input: { command } });
 
-  it("denies unwrapped build/test commands with guidance", () => {
-    for (const cmd of ["npm test", "npm run build", "./gradlew test", "go test ./...", "pytest -q"]) {
-      const d = decideClaudeHook(bash(cmd));
-      expect(d.deny, cmd).toBe(true);
-      expect(d.reason).toContain(`npx dev-blackbox run -- ${cmd}`);
+  it("rewrites unwrapped build/test commands instead of blocking them", () => {
+    for (const cmd of [
+      "npm test",
+      "npm run build",
+      "./gradlew test",
+      "gradlew.bat test",
+      "./mvnw -q test",
+      "go test ./...",
+      "pytest -q",
+      "uv run pytest",
+      "make",
+      "make -j4 test",
+    ]) {
+      expect(decideClaudeHook(bash(cmd)).command, cmd).toBe(`npx dev-blackbox run -- ${cmd}`);
     }
   });
 
-  it("allows wrapped commands and unrelated commands", () => {
-    expect(decideClaudeHook(bash("npx dev-blackbox run -- npm test")).deny).toBe(false);
-    expect(decideClaudeHook(bash("git status")).deny).toBe(false);
-    expect(decideClaudeHook(bash("ls -la")).deny).toBe(false);
-    expect(decideClaudeHook({ tool_name: "Read", tool_input: {} }).deny).toBe(false);
-    expect(decideClaudeHook("garbage").deny).toBe(false);
+  it("wraps only the build/test stage of compound commands", () => {
+    const cases: [string, string][] = [
+      ["cd app && npm test", "cd app && npx dev-blackbox run -- npm test"],
+      ["npm test 2>&1 | tail -50", "npx dev-blackbox run -- npm test 2>&1 | tail -50"],
+      ["CI=1 npm test", "CI=1 npx dev-blackbox run -- npm test"],
+      ["npm run lint; npm test", "npx dev-blackbox run -- npm run lint; npx dev-blackbox run -- npm test"],
+      ["git stash || npm test", "git stash || npx dev-blackbox run -- npm test"],
+      ['echo "a && npm test"', 'echo "a && npm test"'],
+    ];
+    for (const [input, expected] of cases) {
+      expect(decideClaudeHook(bash(input)).command ?? input, input).toBe(expected);
+    }
+  });
+
+  it("uses the install-specific command prefix", () => {
+    expect(decideClaudeHook(bash("npm test"), "dev-blackbox").command).toBe("dev-blackbox run -- npm test");
+  });
+
+  it("leaves wrapped, long-running, and unrelated commands alone", () => {
+    for (const cmd of [
+      "npx dev-blackbox run -- npm test",
+      "dev-blackbox run -- ./gradlew test",
+      "npm run dev",
+      "npm run dev:api",
+      "npm start",
+      "./gradlew bootRun",
+      "./mvnw spring-boot:run",
+      "npx vitest --watch",
+      "make install",
+      "git status",
+      "ls -la",
+      "cat <<EOF\nnpm test\nEOF",
+      "echo $(npm test)",
+    ]) {
+      expect(decideClaudeHook(bash(cmd)).command, cmd).toBeUndefined();
+    }
+    expect(decideClaudeHook({ tool_name: "Read", tool_input: {} }).command).toBeUndefined();
+    expect(decideClaudeHook("garbage").command).toBeUndefined();
   });
 
   it("init --hooks claude-code registers the hook idempotently", () => {
-    const r1 = runInit(dir, { hooks: "claude-code" });
+    const r1 = runInit(dir, { hooks: "claude-code", install: "global" });
     expect(r1.hooksConfigured).toBe(true);
-    expect(setupClaudeCodeHook(dir)).toBe(false); // second run: already there
+    expect(setupClaudeCodeHook(dir, "global")).toBe(false); // second run: already there
     const settings = JSON.parse(fs.readFileSync(path.join(dir, ".claude", "settings.json"), "utf8"));
     expect(JSON.stringify(settings.hooks.PreToolUse)).toContain("dev-blackbox claude-hook");
     expect(settings.hooks.PreToolUse).toHaveLength(1);
+  });
+
+  it("calls a local install directly and migrates the old npx hook in place", () => {
+    const claudeDir = path.join(dir, ".claude");
+    fs.mkdirSync(claudeDir, { recursive: true });
+    const old = {
+      permissions: { allow: ["Bash(git status)"] },
+      hooks: {
+        PreToolUse: [
+          { matcher: "Bash", hooks: [{ type: "command", command: "npx dev-blackbox claude-hook" }] },
+        ],
+      },
+    };
+    fs.writeFileSync(path.join(claudeDir, "settings.json"), JSON.stringify(old), "utf8");
+
+    expect(setupClaudeCodeHook(dir, "local")).toBe(true);
+    const settings = JSON.parse(fs.readFileSync(path.join(claudeDir, "settings.json"), "utf8"));
+    expect(settings.permissions).toEqual(old.permissions);
+    expect(settings.hooks.PreToolUse).toHaveLength(1);
+    expect(settings.hooks.PreToolUse[0].hooks[0].command).toBe(
+      'node "${CLAUDE_PROJECT_DIR}/node_modules/dev-blackbox/dist/cli.js" claude-hook',
+    );
+    expect(setupClaudeCodeHook(dir, "local")).toBe(false);
+  });
+
+  it("does not overwrite malformed Claude settings", () => {
+    const claudeDir = path.join(dir, ".claude");
+    const settingsFile = path.join(claudeDir, "settings.json");
+    const original = '{\n  // keep this permission\n  "permissions": {}\n}\n';
+    fs.mkdirSync(claudeDir, { recursive: true });
+    fs.writeFileSync(settingsFile, original, "utf8");
+
+    expect(() => setupClaudeCodeHook(dir)).toThrow(/cannot update invalid Claude settings/);
+    expect(fs.readFileSync(settingsFile, "utf8")).toBe(original);
   });
 });

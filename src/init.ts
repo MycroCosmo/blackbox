@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { CONFIG_FILE, defaultConfigYaml } from "./config.js";
+import { cliCommand, detectInstall, type InstallKind } from "./invocation.js";
 import { BLACKBOX_DIR } from "./storage.js";
 
 /** `dev-blackbox init` (spec 3.2): the agent adoption path.
@@ -12,20 +13,21 @@ import { BLACKBOX_DIR } from "./storage.js";
 export const BLOCK_START = "<!-- dev-blackbox:start -->";
 export const BLOCK_END = "<!-- dev-blackbox:end -->";
 
-export function instructionBlock(): string {
+/** `cli` is how the agent invokes dev-blackbox in this project:
+ *  `npx dev-blackbox` for a local install, `dev-blackbox` for a global one. */
+export function instructionBlock(cli = "npx dev-blackbox"): string {
   return [
     BLOCK_START,
     "## Dev Blackbox usage rules",
     "",
-    "- At the start of a bug-fix task, inspect existing evidence with `npx dev-blackbox incident list --format json` and `npx dev-blackbox network list --failed --format json`.",
-    "- Always run build, test, and execution commands through `npx dev-blackbox run -- <command>`.",
-    "- When a command fails, an Incident ID is printed. Inspect it with `npx dev-blackbox incident show <ID> --format json` instead of re-reading raw logs.",
-    "- If the same error repeats, check the existing incident's occurrence history first (`npx dev-blackbox incident list --format json`) instead of re-analyzing from scratch.",
-    "- After fixing an error, re-run the same command; a success marks the incident as a resolve candidate. Confirm with `npx dev-blackbox incident resolve <ID>`.",
+    `- Run build, test, and execution commands through \`${cli} run -- <command>\`.`,
+    "- When a command fails, read the summary printed at the end of its output before anything else. `Error`/`At` locate the failure at the end of the log; `Earliest cause` is the deepest cause of the first exception printed, even when it scrolled far above the end. It is usually, but not always, the real cause.",
+    "- `Occurrences: N ... this failure happened before` means your previous fix did not work. The indented lines list the files you changed between failing runs; do not repeat an approach that already failed, and re-check your assumptions about the cause.",
+    `- For the full record, use \`${cli} incident show <ID> --format json\` instead of re-running the command or re-reading raw logs.`,
+    `- At the start of a bug-fix task, check existing evidence: \`${cli} incident list --format json\` (and \`${cli} network list --failed --format json\` for HTTP failures).`,
+    `- After a fix, re-run the same command; a success marks the incident as a resolve candidate. Confirm with \`${cli} incident resolve <ID>\`.`,
     "- When `init --auto` wrapped the project dev script, use the normal `npm run dev`; it starts the recorder and collector together.",
-    "- Node.js `fetch` calls are auto-instrumented in attached dev sessions. Browser traffic still needs the fetch/Axios interceptor from the dev-blackbox examples.",
-    "- If recorded evidence is insufficient, inspect source code, raw logs, and reproduce the failure; do not guess from a report alone.",
-    "- Long-running detached services can still use `npx dev-blackbox start --name <name> -- <command>` and `process list/logs/stop`.",
+    "- If recorded evidence is insufficient, inspect source code and reproduce the failure; do not guess from a report alone.",
     "- Never replay non-idempotent requests without explicit user confirmation.",
     BLOCK_END,
   ].join("\n");
@@ -39,6 +41,8 @@ export interface InitResult {
   detectedAgentFiles: string[];
   hooksConfigured: boolean;
   scriptWrap?: ScriptWrapResult;
+  /** How dev-blackbox was found; decides the command written into the rules. */
+  install: InstallKind;
 }
 
 export interface ScriptWrapResult {
@@ -61,8 +65,16 @@ export function upsertBlock(content: string, block: string): string {
 
 export function runInit(
   projectDir: string,
-  opts: { agentFiles?: boolean; hooks?: string; auto?: boolean; script?: string } = {},
+  opts: {
+    agentFiles?: boolean;
+    hooks?: string;
+    auto?: boolean;
+    script?: string;
+    /** Overrides install detection (tests, unusual layouts). */
+    install?: InstallKind;
+  } = {},
 ): InitResult {
+  const install = opts.install ?? detectInstall(projectDir);
   const result: InitResult = {
     createdDir: false,
     createdConfig: false,
@@ -70,7 +82,15 @@ export function runInit(
     updatedInstructionFiles: [],
     detectedAgentFiles: [],
     hooksConfigured: false,
+    install,
   };
+
+  // 0. Pre-flight. Hook registration is the only step that can reject the
+  //    project outright, and it runs last — so validate it before the first
+  //    write, or a bad settings.json leaves init half-applied.
+  if (opts.hooks === "claude-code") {
+    readClaudeSettings(path.join(projectDir, ".claude", "settings.json"));
+  }
 
   // 1. .dev-blackbox/ + config.yml
   const root = path.join(projectDir, BLACKBOX_DIR);
@@ -97,7 +117,7 @@ export function runInit(
   }
 
   // 3. CLAUDE.md instruction block (created if missing)
-  const block = instructionBlock();
+  const block = instructionBlock(cliCommand(install));
   const claudeMd = path.join(projectDir, "CLAUDE.md");
   const claudeContent = fs.existsSync(claudeMd) ? fs.readFileSync(claudeMd, "utf8") : "";
   fs.writeFileSync(claudeMd, upsertBlock(claudeContent, block), "utf8");
@@ -122,7 +142,7 @@ export function runInit(
 
   // 5. Claude Code hooks (spec 3.2, 경로 2 — opt-in because it is invasive).
   if (opts.hooks === "claude-code") {
-    result.hooksConfigured = setupClaudeCodeHook(projectDir);
+    result.hooksConfigured = setupClaudeCodeHook(projectDir, install);
   }
 
   if (opts.auto) {
@@ -185,27 +205,82 @@ export function wrapPackageScript(projectDir: string, script = "dev"): ScriptWra
   return { script, originalScript, status: "wrapped", message: `${script} now starts Dev Blackbox automatically` };
 }
 
-const HOOK_COMMAND = "npx dev-blackbox claude-hook";
+/** The hook runs before EVERY Bash call, so avoid npx's startup cost when
+ *  the package is installed: call the local file directly (Claude Code
+ *  substitutes ${CLAUDE_PROJECT_DIR}), or the global binary. */
+export function hookCommand(install: InstallKind): string {
+  if (install === "local")
+    return 'node "${CLAUDE_PROJECT_DIR}/node_modules/dev-blackbox/dist/cli.js" claude-hook';
+  if (install === "global") return "dev-blackbox claude-hook";
+  return "npx -y dev-blackbox claude-hook";
+}
+
+/** Matches any command this package ever registered, across versions. */
+function isOurHook(command: unknown): boolean {
+  return typeof command === "string" && /dev-blackbox\b.*\bclaude-hook\b/.test(command);
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** Reads .claude/settings.json, rejecting any shape this hook cannot safely
+ *  extend. Validation covers the nested `hooks` / `hooks.PreToolUse` slots too:
+ *  writing into a non-object `hooks` or pushing onto a non-array `PreToolUse`
+ *  would otherwise fail deep inside with an opaque TypeError. */
+export function readClaudeSettings(settingsFile: string): Record<string, unknown> {
+  if (!fs.existsSync(settingsFile)) return {};
+  const reject = (detail: string): never => {
+    throw new Error(`cannot update invalid Claude settings at ${settingsFile}: ${detail}`);
+  };
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(fs.readFileSync(settingsFile, "utf8"));
+  } catch (error) {
+    return reject(error instanceof Error ? error.message : String(error));
+  }
+  if (!isPlainObject(parsed)) reject("top-level value must be an object");
+  const settings = parsed as Record<string, unknown>;
+
+  if (settings.hooks !== undefined && !isPlainObject(settings.hooks)) {
+    reject("'hooks' must be an object");
+  }
+  const hooks = settings.hooks as Record<string, unknown> | undefined;
+  if (hooks?.PreToolUse !== undefined && !Array.isArray(hooks.PreToolUse)) {
+    reject("'hooks.PreToolUse' must be an array");
+  }
+  return settings;
+}
 
 /** Registers a PreToolUse hook in the project's .claude/settings.json that
- *  denies unwrapped build/test Bash commands with guidance to use
- *  `dev-blackbox run`. Idempotent. Returns true when newly added. */
-export function setupClaudeCodeHook(projectDir: string): boolean {
+ *  routes unwrapped build/test Bash commands through `dev-blackbox run`.
+ *  Idempotent; an entry from an earlier version (or install kind) is updated
+ *  in place. Returns true when the settings file changed. */
+export function setupClaudeCodeHook(
+  projectDir: string,
+  install: InstallKind = detectInstall(projectDir),
+): boolean {
   const claudeDir = path.join(projectDir, ".claude");
   const settingsFile = path.join(claudeDir, "settings.json");
-  let settings: Record<string, unknown> = {};
-  try {
-    settings = JSON.parse(fs.readFileSync(settingsFile, "utf8"));
-  } catch {
-    /* missing or invalid → start fresh */
-  }
+  const settings = readClaudeSettings(settingsFile);
   const hooks = (settings.hooks ??= {}) as Record<string, unknown[]>;
   const preToolUse = (hooks.PreToolUse ??= []) as unknown[];
-  if (JSON.stringify(preToolUse).includes(HOOK_COMMAND)) return false;
-  preToolUse.push({
-    matcher: "Bash",
-    hooks: [{ type: "command", command: HOOK_COMMAND }],
-  });
+  const command = hookCommand(install);
+  const ours = preToolUse
+    .flatMap((group) =>
+      isPlainObject(group) && Array.isArray(group.hooks) ? (group.hooks as unknown[]) : [],
+    )
+    .filter((h): h is Record<string, unknown> => isPlainObject(h) && isOurHook(h.command));
+  if (ours.length > 0) {
+    if (ours.every((h) => h.command === command)) return false;
+    for (const h of ours) h.command = command;
+  } else {
+    preToolUse.push({
+      matcher: "Bash",
+      hooks: [{ type: "command", command }],
+    });
+  }
   fs.mkdirSync(claudeDir, { recursive: true });
   fs.writeFileSync(settingsFile, JSON.stringify(settings, null, 2) + "\n", "utf8");
   return true;

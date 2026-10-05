@@ -1,0 +1,16 @@
+{
+  "name": "dev-blackbox-playwright-complex-example",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node src/server.mjs",
+    "test:e2e": "playwright test",
+    "test:e2e:blackbox": "dev-blackbox run -- playwright test",
+    "audit:file-growth": "node scripts/audit-file-growth.mjs"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.55.0",
+    "dev-blackbox": "file:../.."
+  }
+}

@@ -32,6 +32,7 @@ same trace.
 
 Snippets:
 
+- [playwright-complex-app](playwright-complex-app/README.md) — runnable layered checkout failure and file-growth audit
 - [fetch-interceptor.md](fetch-interceptor.md) — browser/Node fetch wrapper
 - [axios-interceptor.md](axios-interceptor.md) — Axios interceptors
 - [spring-filter.md](spring-filter.md) — Spring Boot `OncePerRequestFilter`

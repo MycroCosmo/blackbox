@@ -24,7 +24,17 @@ describe("runInit", () => {
     expect(fs.readFileSync(path.join(dir, ".gitignore"), "utf8")).toContain(".dev-blackbox/");
     const claude = fs.readFileSync(path.join(dir, "CLAUDE.md"), "utf8");
     expect(claude).toContain(BLOCK_START);
-    expect(claude).toContain("npx dev-blackbox run --");
+    expect(claude).toMatch(/`(?:npx )?dev-blackbox run -- <command>`/);
+  });
+
+  it("writes the command that matches how dev-blackbox is installed", () => {
+    runInit(dir, { install: "local" });
+    expect(fs.readFileSync(path.join(dir, "CLAUDE.md"), "utf8")).toContain("`npx dev-blackbox run -- <command>`");
+    const result = runInit(dir, { install: "global" });
+    expect(result.install).toBe("global");
+    const claude = fs.readFileSync(path.join(dir, "CLAUDE.md"), "utf8");
+    expect(claude).toContain("`dev-blackbox run -- <command>`");
+    expect(claude).not.toContain("npx dev-blackbox");
   });
 
   it("is idempotent: re-running never duplicates the block (spec 15)", () => {
@@ -123,6 +133,44 @@ describe("runInit", () => {
     expect(result.scriptWrap?.message).toContain("npm install -D dev-blackbox");
     const pkg = JSON.parse(fs.readFileSync(path.join(dir, "package.json"), "utf8"));
     expect(pkg.scripts).toEqual({ dev: "vite" });
+  });
+});
+
+describe("setupClaudeCodeHook validation", () => {
+  const writeSettings = (content: string) => {
+    fs.mkdirSync(path.join(dir, ".claude"), { recursive: true });
+    fs.writeFileSync(path.join(dir, ".claude", "settings.json"), content, "utf8");
+  };
+
+  it.each([
+    ["malformed JSON", "{ not json"],
+    ["a top-level array", "[]"],
+    ["a non-object hooks value", '{"hooks": []}'],
+    ["a non-array PreToolUse value", '{"hooks": {"PreToolUse": {}}}'],
+  ])("refuses to write over %s", (_label, content) => {
+    writeSettings(content);
+    expect(() => runInit(dir, { hooks: "claude-code" })).toThrow(/invalid Claude settings/);
+    expect(fs.readFileSync(path.join(dir, ".claude", "settings.json"), "utf8")).toBe(content);
+  });
+
+  it("rejects bad settings before any other file is touched", () => {
+    // Hook registration runs last, so without a pre-flight check the throw
+    // left .gitignore/CLAUDE.md written and the script wrap skipped.
+    writeSettings('{"hooks": {"PreToolUse": {}}}');
+    expect(() => runInit(dir, { hooks: "claude-code", auto: true })).toThrow();
+    expect(fs.existsSync(path.join(dir, "CLAUDE.md"))).toBe(false);
+    expect(fs.existsSync(path.join(dir, ".gitignore"))).toBe(false);
+    expect(fs.existsSync(path.join(dir, ".dev-blackbox"))).toBe(false);
+  });
+
+  it("merges into valid existing settings and stays idempotent", () => {
+    writeSettings(JSON.stringify({ model: "opus", hooks: { PreToolUse: [] } }, null, 2));
+    expect(runInit(dir, { hooks: "claude-code" }).hooksConfigured).toBe(true);
+    expect(runInit(dir, { hooks: "claude-code" }).hooksConfigured).toBe(false);
+
+    const settings = JSON.parse(fs.readFileSync(path.join(dir, ".claude", "settings.json"), "utf8"));
+    expect(settings.model).toBe("opus");
+    expect(settings.hooks.PreToolUse).toHaveLength(1);
   });
 });
 

@@ -7,7 +7,7 @@ import { SCHEMA_VERSION, type CommandRecord, type IncidentRecord } from "./types
 
 /** JSONL prototype storage (spec 6.1/6.2).
  *
- *  Each `run` process appends only to its own session file
+ *  Each `run` process appends only to its own bounded session file
  *  (`sessions/commands-<sessionId>.jsonl`). Incident read/modify/write
  *  transactions share a cross-process lock; updates append a full new record
  *  and the latest record per incidentId wins on read. */
@@ -16,6 +16,11 @@ export const BLACKBOX_DIR = ".dev-blackbox";
 const INCIDENT_LOCK_TIMEOUT_MS = 10_000;
 const INCIDENT_LOCK_STALE_MS = 30_000;
 const LOCK_WAIT_ARRAY = new Int32Array(new SharedArrayBuffer(4));
+
+interface LockHandle {
+  fd: number;
+  token: string;
+}
 
 export class Storage {
   readonly root: string;
@@ -94,10 +99,11 @@ export class Storage {
     return `${Date.now().toString(36)}-${crypto.randomBytes(3).toString("hex")}`;
   }
 
-  appendCommand(record: CommandRecord): void {
+  appendCommand(record: CommandRecord, maxFiles = Number.POSITIVE_INFINITY): void {
     this.ensureDirs();
     const file = path.join(this.sessionsDir, `commands-${record.sessionId}.jsonl`);
     fs.appendFileSync(file, JSON.stringify(record) + "\n", "utf8");
+    if (Number.isFinite(maxFiles)) trimOldestFiles(this.sessionsDir, maxFiles);
   }
 
   readCommands(): CommandRecord[] {
@@ -116,42 +122,15 @@ export class Storage {
   withIncidentLock<T>(operation: () => T): T {
     if (this.incidentLockDepth > 0) return operation();
     this.ensureDirs();
-    const deadline = Date.now() + INCIDENT_LOCK_TIMEOUT_MS;
-    let fd: number | undefined;
-
-    while (fd === undefined) {
-      try {
-        fd = fs.openSync(this.incidentsLockFile, "wx");
-        fs.writeFileSync(
-          fd,
-          JSON.stringify({ pid: process.pid, acquiredAt: new Date().toISOString() }),
-          "utf8",
-        );
-      } catch (error) {
-        const code = (error as NodeJS.ErrnoException).code;
-        if (code !== "EEXIST") throw error;
-        if (this.removeStaleIncidentLock()) continue;
-        if (Date.now() >= deadline) {
-          throw new Error(`timed out waiting for incident storage lock: ${this.incidentsLockFile}`);
-        }
-        Atomics.wait(LOCK_WAIT_ARRAY, 0, 0, 10);
-      }
-    }
+    const handle = this.acquireLock(this.incidentsLockFile, true);
+    if (!handle) throw new Error("incident lock acquisition unexpectedly skipped");
 
     this.incidentLockDepth++;
     try {
       return operation();
     } finally {
       this.incidentLockDepth--;
-      try {
-        fs.closeSync(fd);
-      } finally {
-        try {
-          fs.rmSync(this.incidentsLockFile);
-        } catch {
-          /* stale-lock cleanup or external deletion already removed it */
-        }
-      }
+      this.releaseLock(this.incidentsLockFile, handle);
     }
   }
 
@@ -161,43 +140,15 @@ export class Storage {
   withMaintenanceLock<T>(operation: () => T, wait = true): T | undefined {
     if (this.maintenanceLockDepth > 0) return operation();
     this.ensureDirs();
-    const deadline = Date.now() + INCIDENT_LOCK_TIMEOUT_MS;
-    let fd: number | undefined;
-
-    while (fd === undefined) {
-      try {
-        fd = fs.openSync(this.maintenanceLockFile, "wx");
-        fs.writeFileSync(
-          fd,
-          JSON.stringify({ pid: process.pid, acquiredAt: new Date().toISOString() }),
-          "utf8",
-        );
-      } catch (error) {
-        const code = (error as NodeJS.ErrnoException).code;
-        if (code !== "EEXIST") throw error;
-        if (this.removeStaleLock(this.maintenanceLockFile)) continue;
-        if (!wait) return undefined;
-        if (Date.now() >= deadline) {
-          throw new Error(`timed out waiting for maintenance lock: ${this.maintenanceLockFile}`);
-        }
-        Atomics.wait(LOCK_WAIT_ARRAY, 0, 0, 10);
-      }
-    }
+    const handle = this.acquireLock(this.maintenanceLockFile, wait);
+    if (!handle) return undefined;
 
     this.maintenanceLockDepth++;
     try {
       return operation();
     } finally {
       this.maintenanceLockDepth--;
-      try {
-        fs.closeSync(fd);
-      } finally {
-        try {
-          fs.rmSync(this.maintenanceLockFile);
-        } catch {
-          /* stale-lock cleanup or external deletion already removed it */
-        }
-      }
+      this.releaseLock(this.maintenanceLockFile, handle);
     }
   }
 
@@ -311,7 +262,9 @@ export class Storage {
   /** Stores gzipped log text; returns the blob path relative to root. */
   writeLogBlob(incidentId: string, text: string): string {
     this.ensureDirs();
-    const name = `${incidentId}-${Date.now()}.log.gz`;
+    // Incident records retain only the latest logBlob path, so timestamped
+    // names made every previous occurrence an unreferenced file until prune.
+    const name = `${incidentId}.log.gz`;
     fs.writeFileSync(path.join(this.blobsDir, name), zlib.gzipSync(text));
     return path.join("blobs", "logs", name);
   }
@@ -358,11 +311,131 @@ export class Storage {
     return dirSize(this.root);
   }
 
-  private removeStaleIncidentLock(): boolean {
-    return this.removeStaleLock(this.incidentsLockFile);
+  /**
+   * Acquires a lock without allowing stale cleanup to delete a successor.
+   * Cleanup first owns `<lock>.recovery`, then re-checks the current lock.
+   * New owners check that guard both before and after creating the lock.
+   *
+   * The guard itself is treated as recoverable state: a recovery owner that
+   * died mid-cleanup would otherwise block every future acquisition forever.
+   */
+  private acquireLock(lockFile: string, wait: boolean): LockHandle | undefined {
+    const deadline = Date.now() + INCIDENT_LOCK_TIMEOUT_MS;
+    const recoveryFile = `${lockFile}.recovery`;
+
+    for (;;) {
+      if (fs.existsSync(recoveryFile) && !this.clearStaleRecovery(recoveryFile)) {
+        if (!wait) return undefined;
+        this.waitForLock(deadline, lockFile, recoveryFile);
+        continue;
+      }
+
+      const token = crypto.randomBytes(16).toString("hex");
+      let fd: number | undefined;
+      try {
+        fd = fs.openSync(lockFile, "wx");
+        fs.writeFileSync(
+          fd,
+          JSON.stringify({ pid: process.pid, token, acquiredAt: new Date().toISOString() }),
+          "utf8",
+        );
+      } catch (error) {
+        if (fd !== undefined) {
+          try {
+            fs.closeSync(fd);
+          } catch {
+            /* best effort */
+          }
+          try {
+            fs.rmSync(lockFile);
+          } catch {
+            /* best effort */
+          }
+        }
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+        if (this.recoverStaleLock(lockFile, recoveryFile)) continue;
+        if (!wait) return undefined;
+        this.waitForLock(deadline, lockFile, recoveryFile);
+        continue;
+      }
+
+      // Recovery may have started after the pre-check but before our wx.
+      if (fs.existsSync(recoveryFile) && !this.clearStaleRecovery(recoveryFile)) {
+        this.releaseLock(lockFile, { fd, token });
+        if (!wait) return undefined;
+        this.waitForLock(deadline, lockFile, recoveryFile);
+        continue;
+      }
+      return { fd, token };
+    }
   }
 
-  private removeStaleLock(lockFile: string): boolean {
+  /** Removes a recovery guard whose owner is gone. Returns true when the guard
+   * is no longer in the way (removed here, or already absent). */
+  private clearStaleRecovery(recoveryFile: string): boolean {
+    if (!this.isStaleLock(recoveryFile)) return false;
+    try {
+      fs.rmSync(recoveryFile);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    return true;
+  }
+
+  private recoverStaleLock(lockFile: string, recoveryFile: string): boolean {
+    if (!this.isStaleLock(lockFile)) return false;
+    let recoveryFd: number | undefined;
+    try {
+      recoveryFd = fs.openSync(recoveryFile, "wx");
+      fs.writeFileSync(
+        recoveryFd,
+        JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }),
+        "utf8",
+      );
+    } catch (error) {
+      if (recoveryFd !== undefined) {
+        // The guard was created but never described (e.g. ENOSPC on write).
+        // Leaving it behind would block every later acquisition forever.
+        try {
+          fs.closeSync(recoveryFd);
+        } catch {
+          /* best effort */
+        }
+        try {
+          fs.rmSync(recoveryFile);
+        } catch {
+          /* best effort */
+        }
+      }
+      if ((error as NodeJS.ErrnoException).code === "EEXIST") return false;
+      throw error;
+    }
+
+    try {
+      // Admission is now closed. Re-check because the path may belong to a
+      // live successor rather than the stale owner observed above.
+      if (!this.isStaleLock(lockFile)) return false;
+      try {
+        fs.rmSync(lockFile);
+        return true;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return true;
+        throw error;
+      }
+    } finally {
+      try {
+        fs.closeSync(recoveryFd);
+      } finally {
+        try {
+          fs.rmSync(recoveryFile);
+        } catch {
+          /* already removed */
+        }
+      }
+    }
+  }
+
+  private isStaleLock(lockFile: string): boolean {
     try {
       const stat = fs.statSync(lockFile);
       let ownerAlive: boolean | undefined;
@@ -373,13 +446,57 @@ export class Storage {
         /* a creator may still be writing; age check below handles true stale locks */
       }
       if (ownerAlive === false || (ownerAlive === undefined && Date.now() - stat.mtimeMs > INCIDENT_LOCK_STALE_MS)) {
-        fs.rmSync(lockFile);
         return true;
       }
     } catch {
       return true; // disappeared between EEXIST and inspection
     }
     return false;
+  }
+
+  private releaseLock(lockFile: string, handle: LockHandle): void {
+    try {
+      fs.closeSync(handle.fd);
+    } finally {
+      try {
+        const current = JSON.parse(fs.readFileSync(lockFile, "utf8")) as { token?: unknown };
+        if (current.token === handle.token) fs.rmSync(lockFile);
+      } catch {
+        /* stale recovery or external deletion already removed it */
+      }
+    }
+  }
+
+  private waitForLock(deadline: number, lockFile: string, recoveryFile: string): void {
+    if (Date.now() >= deadline) {
+      const recoveryHint = fs.existsSync(recoveryFile)
+        ? `; recovery guard remains at ${recoveryFile}`
+        : "";
+      throw new Error(`timed out waiting for storage lock: ${lockFile}${recoveryHint}`);
+    }
+    Atomics.wait(LOCK_WAIT_ARRAY, 0, 0, 10);
+  }
+}
+
+function trimOldestFiles(dir: string, maxFiles: number): void {
+  let files: { file: string; mtimeMs: number }[];
+  try {
+    files = fs.readdirSync(dir)
+      .filter((name) => name.startsWith("commands-") && name.endsWith(".jsonl"))
+      .map((name) => {
+        const file = path.join(dir, name);
+        return { file, mtimeMs: fs.statSync(file).mtimeMs };
+      });
+  } catch {
+    return;
+  }
+  files.sort((a, b) => a.mtimeMs - b.mtimeMs || a.file.localeCompare(b.file));
+  for (const { file } of files.slice(0, Math.max(0, files.length - maxFiles))) {
+    try {
+      fs.rmSync(file);
+    } catch {
+      /* another run may have trimmed it first */
+    }
   }
 }
 

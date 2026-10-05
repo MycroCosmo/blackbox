@@ -3,6 +3,7 @@ import {
   fingerprintFromError,
   fingerprintFromProcess,
   normalizeMessage,
+  normalizeRoutePath,
 } from "../src/fingerprint.js";
 
 describe("normalizeMessage", () => {
@@ -13,12 +14,25 @@ describe("normalizeMessage", () => {
     );
     expect(normalizeMessage("cannot open 'foo.txt'")).toBe("cannot open <str>");
     expect(normalizeMessage("address 0xdeadbeef")).toBe("address <hex>");
+    expect(
+      normalizeMessage("skipping repeated attempt to load context for [MergedContextConfiguration@30c1da48 testClass]"),
+    ).toBe(
+      normalizeMessage("skipping repeated attempt to load context for [MergedContextConfiguration@6b4a4e4 testClass]"),
+    );
   });
 
   it("keeps stable text unchanged", () => {
     expect(normalizeMessage("Cannot read properties of undefined")).toBe(
       "Cannot read properties of undefined",
     );
+  });
+});
+
+describe("normalizeRoutePath", () => {
+  it("normalizes volatile segments without erasing stable route names", () => {
+    expect(normalizeRoutePath("/api/todos/42")).toBe("/api/todos/<n>");
+    expect(normalizeRoutePath("/api/todos/977")).toBe("/api/todos/<n>");
+    expect(normalizeRoutePath("/charge/42")).not.toBe(normalizeRoutePath("/refund/42"));
   });
 });
 

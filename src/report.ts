@@ -31,6 +31,13 @@ const STRINGS = {
     confidence: "confidence",
     pinned: "Pinned",
     location: "Latest location",
+    rootCause: "Earliest cause (deepest cause of the first exception in the output)",
+    outputLine: "output line",
+    attempts: "Changes between occurrences",
+    attemptUnknown: "file changes unknown (not a git workspace)",
+    attemptNone: "no file changes (re-run without edits)",
+    attemptChanged: "changed",
+    attemptSame: "same failure",
   },
   ko: {
     status: "상태",
@@ -55,6 +62,13 @@ const STRINGS = {
     confidence: "신뢰도",
     pinned: "고정됨",
     location: "최근 오류 위치",
+    rootCause: "가장 이른 원인 (출력의 첫 예외에서 가장 깊은 원인)",
+    outputLine: "출력 줄",
+    attempts: "발생 사이의 변경 내역",
+    attemptUnknown: "변경 파일 알 수 없음 (git 작업 공간 아님)",
+    attemptNone: "파일 변경 없음 (수정 없이 재실행)",
+    attemptChanged: "변경",
+    attemptSame: "같은 실패",
   },
 } satisfies Record<Lang, Record<string, string>>;
 
@@ -81,6 +95,38 @@ export function renderIncidentReport(inc: IncidentRecord, lang: Lang = "en"): st
     lines.push(
       `- ${t.location}: ${loc.file}${loc.line ? `:${loc.line}` : ""}${loc.function ? ` (${loc.function})` : ""}`,
     );
+  }
+  if (inc.rootCause) {
+    const rc = inc.rootCause;
+    lines.push("");
+    lines.push(`## ${t.rootCause}`);
+    lines.push("");
+    const where = rc.location
+      ? ` — ${rc.location.file}${rc.location.line ? `:${rc.location.line}` : ""}${rc.location.function ? ` (${rc.location.function})` : ""}`
+      : "";
+    lines.push(`${rc.errorType}${rc.message ? `: ${rc.message}` : ""}${where} (${t.outputLine} ${rc.outputLine})`);
+    if (rc.excerpt && rc.excerpt.length > 0) {
+      lines.push("");
+      lines.push("```text");
+      for (const l of rc.excerpt) lines.push(l);
+      lines.push("```");
+    }
+  }
+  if (inc.attempts && inc.attempts.length > 0) {
+    lines.push("");
+    lines.push(`## ${t.attempts}`);
+    lines.push("");
+    for (const a of inc.attempts) {
+      const step = `#${a.occurrence - 1} → #${a.occurrence} (${fmt(a.at)})`;
+      if (a.changedFiles === null) lines.push(`- ${step}: ${t.attemptUnknown}`);
+      else if (a.changedFiles.length === 0) lines.push(`- ${step}: ${t.attemptNone}`);
+      else {
+        const more = (a.changedCount ?? a.changedFiles.length) - a.changedFiles.length;
+        lines.push(
+          `- ${step}: ${t.attemptChanged} ${a.changedFiles.join(", ")}${more > 0 ? ` (+${more})` : ""} — ${t.attemptSame}`,
+        );
+      }
+    }
   }
   lines.push("");
   lines.push(`## ${t.facts}`);

@@ -18,6 +18,18 @@ import type { Storage } from "./storage.js";
 const MAX_EVENT_BYTES = 1024 * 1024; // hard cap on a single POST body
 const DEFAULT_NETWORK_REPORT_INTERVAL_MS = 5_000;
 
+function allowedLoopbackOrigin(origin: string | undefined): string | undefined {
+  if (!origin) return undefined;
+  try {
+    const hostname = new URL(origin).hostname.toLowerCase();
+    return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]"
+      ? origin
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export interface Collector {
   port: number;
   sessionId: string;
@@ -85,9 +97,11 @@ export function startCollector(opts: {
   };
 
   const server = http.createServer((req, res) => {
-    const send = (status: number, body: unknown) => {
+    const origin = typeof req.headers.origin === "string" ? req.headers.origin : undefined;
+    const allowedOrigin = allowedLoopbackOrigin(origin);
+    const send = (status: number, body: unknown, headers: Record<string, string> = {}) => {
       const json = JSON.stringify(body);
-      res.writeHead(status, { "content-type": "application/json" });
+      res.writeHead(status, { "content-type": "application/json", ...headers });
       res.end(json);
     };
 
@@ -95,15 +109,45 @@ export function startCollector(opts: {
       send(200, { ok: true, sessionId });
       return;
     }
+    if (req.method === "OPTIONS" && req.url === "/events/network") {
+      if (origin && allowedOrigin) {
+        res.writeHead(204, {
+          "access-control-allow-origin": allowedOrigin,
+          "access-control-allow-methods": "POST",
+          "access-control-allow-headers": "content-type",
+          vary: "Origin",
+        });
+        res.end();
+      } else {
+        send(403, { ok: false, error: "origin not allowed" });
+      }
+      return;
+    }
     if (req.method !== "POST" || req.url !== "/events/network") {
       send(404, { ok: false, error: "not found" });
       return;
+    }
+    if (origin && !allowedOrigin) {
+      send(403, { ok: false, error: "origin not allowed" });
+      return;
+    }
+    const contentType = String(req.headers["content-type"] ?? "").toLowerCase();
+    if (!/^application\/json(?:\s*;|$)/.test(contentType)) {
+      send(415, { ok: false, error: "content-type must be application/json" });
+      return;
+    }
+    if (allowedOrigin) {
+      res.setHeader("access-control-allow-origin", allowedOrigin);
+      res.setHeader("vary", "Origin");
     }
 
     const chunks: Buffer[] = [];
     let size = 0;
     let rejected = false;
     req.on("data", (chunk: Buffer) => {
+      // A buffered chunk can still arrive after the 413 + destroy; sending
+      // twice would throw ERR_HTTP_HEADERS_SENT inside the stream handler.
+      if (rejected) return;
       size += chunk.length;
       if (size > MAX_EVENT_BYTES) {
         rejected = true;

@@ -1,6 +1,12 @@
 /** Node.js fetch auto-instrumentation loaded through NODE_OPTIONS by
- * `dev-blackbox dev`. It intentionally captures metadata only; response
- * streams and request bodies are never consumed or altered. */
+ * `dev-blackbox dev`. It captures metadata only: response streams and request
+ * bodies are never consumed.
+ *
+ * It is not fully transparent, though — every outgoing request gains an
+ * `x-dev-blackbox-trace-id` header so a browser call, a server call and the
+ * resulting failure can be correlated. That header travels to third-party
+ * hosts too, and on cross-origin requests it turns a simple request into a
+ * preflighted one. Use `dev-blackbox dev` for local development only. */
 
 const collectorUrl = process.env.DEV_BLACKBOX_COLLECTOR_URL?.replace(/\/$/, "");
 const PATCHED = Symbol.for("dev-blackbox.fetch.patched");

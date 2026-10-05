@@ -1,6 +1,8 @@
 /** Shared data model. JSON output schemas built from these types are
  *  backward-compatible within a major version (see spec 3.7). */
 
+import type { WorkspaceSnapshot } from "./workspace.js";
+
 export const SCHEMA_VERSION = 1;
 
 export interface ErrorLocation {
@@ -44,6 +46,30 @@ export interface IncidentRecord {
   facts: string[];
   hypotheses: { description: string; confidence?: number }[];
   resolvedAt?: string;
+  /** Deepest cause of the first exception chain in the latest failing run's
+   *  output, which may lie far outside the captured log window. */
+  rootCause?: {
+    errorType: string;
+    message: string;
+    location?: ErrorLocation;
+    outputLine: number;
+    /** The cause line and a few following lines (redacted). */
+    excerpt?: string[];
+  };
+  /** Workspace state (git) at the latest occurrence; see workspace.ts. */
+  lastWorkspace?: WorkspaceSnapshot;
+  /** Files edited between consecutive occurrences, newest last (capped). */
+  attempts?: IncidentAttempt[];
+}
+
+export interface IncidentAttempt {
+  /** Occurrence number this attempt led to (2 = the first repeat). */
+  occurrence: number;
+  at: string;
+  /** Files changed since the previous occurrence; null when unknown (no git). */
+  changedFiles: string[] | null;
+  /** Total count when `changedFiles` was capped. */
+  changedCount?: number;
 }
 
 export interface CommandRecord {

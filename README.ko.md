@@ -1,218 +1,119 @@
-# Dev Blackbox
+# dev-blackbox
 
-[English documentation](README.md)
+**AI 코딩 에이전트가 같은 자리를 맴돌지 않게.**
 
-AI 코딩 에이전트를 위한 로컬 실행 기록기입니다. 프로젝트의 개발 명령을
-터미널 기록기와 로컬 네트워크 collector를 통해 실행하고, 실패 정보를
-마스킹된 구조화 인시던트와 Markdown 보고서로 남깁니다.
+[English](README.md) · [벤치마크](bench/README.md) · [고급 사용법 (영문)](docs/advanced.md)
 
-## 설치 및 자동 연결
+- 에이전트는 실패할 때마다 처음 보는 에러처럼 여기고 같은 에러를 몇 번이고 다시 고칩니다.
+- 중요한 한 줄을 찾으려고 수천 줄짜리 빌드 로그를 매번 다시 읽습니다.
+- 세션이 끝나면 그 실패에 대해 알아낸 내용이 전부 사라집니다.
 
-```bash
-npm install --save-dev dev-blackbox
-npx dev-blackbox init --auto
-npm run dev
-```
+<!-- DEMO_GIF -->
 
-`init --auto`는 다음 작업을 수행합니다.
+<!-- BENCH_TABLE -->
 
-- `.dev-blackbox/config.yml`을 만들고 `.dev-blackbox/`를 `.gitignore`에 추가
-- AI 에이전트 규칙을 `CLAUDE.md`와 `AGENTS.md`에 추가
-- 기존 `dev` 명령을 `dev:original`로 보존
-- `dev`를 `dev-blackbox dev -- npm run dev:original`로 변경
+측정 방법, 개별 실행 결과 전체, 재현 방법: [bench/](bench/README.md)
 
-의존성이 사용자 프로젝트를 몰래 변경하지 않도록 `npm install`만으로는
-스크립트를 수정하지 않습니다. 로컬 실행 파일
-`node_modules/.bin/dev-blackbox`가 없으면 `init --auto`도 `package.json`을
-변경하지 않고 설치 안내를 출력합니다.
+## 빠른 시작
 
-`start` 등 다른 npm 스크립트에 연결하려면 다음처럼 실행합니다.
+Node 프로젝트:
 
 ```bash
-npx dev-blackbox init --auto --script start
-```
-
-이미 존재하는 `<스크립트>:original`은 덮어쓰지 않으며 초기화 명령을 여러
-번 실행해도 중복 설정되지 않습니다.
-
-연결 후에는 평소 명령 하나로 모두 실행됩니다.
-
-```text
-npm run dev
-  -> Dev Blackbox 기록기
-     -> 127.0.0.1:4319 로컬 collector
-     -> 프로젝트의 원래 dev 명령
-     -> Node.js fetch 자동 계측
-```
-
-## 오류와 네트워크 보고서
-
-프로세스·빌드·테스트 실패는 중복 제거되는 인시던트를 생성합니다.
-
-```text
-.dev-blackbox/reports/incidents/INC-20260718-001.md
-```
-
-수집된 네트워크 요청이 실패하면 다음 보고서들이 서로 연결됩니다.
-
-```text
-.dev-blackbox/reports/incidents/INC-20260718-002.md
-.dev-blackbox/reports/network/REQ-20260718-001.md
-.dev-blackbox/reports/NETWORK.md
-```
-
-실패별 `INC-...md`와 `REQ-...md`는 즉시 생성됩니다. 전체 요약인
-`NETWORK.md`는 요청마다 전체 로그를 다시 읽지 않도록 최대 5초에 한 번만
-갱신하며 collector 종료 시 마지막 내용을 강제로 반영합니다.
-
-Markdown은 사람이 보기 편한 재생성 뷰입니다. AI와 CLI가 사용하는 원본은
-JSONL 데이터와 압축·마스킹된 로그입니다.
-
-## AI 에이전트 작업 흐름
-
-생성된 에이전트 규칙은 버그 수정 전에 기존 근거를 먼저 확인하도록
-안내합니다.
-
-```bash
-npx dev-blackbox incident list --format json
-npx dev-blackbox incident show <INC-ID> --format json
-npx dev-blackbox network list --failed --format json
-npx dev-blackbox network show <REQ-ID> --format json
-```
-
-에이전트는 기록을 확인한 후 코드를 수정하고, 같은 명령을 Dev Blackbox로
-재실행해 검증한 다음 인시던트를 해결 처리해야 합니다. 기록만으로 원인을
-확정할 수 없다면 소스 코드, 원본 로그, 재현 테스트까지 추가로 조사해야
-합니다.
-
-## 네트워크 수집 범위
-
-자동 연결된 `dev` 세션은 Node.js 전역 `fetch`를 자동 계측합니다. 요청이나
-응답 스트림을 소비하지 않고 메서드, URL, 헤더, 상태 코드, 실행 시간과
-오류 메타데이터를 collector에 전달합니다. 기록 전 비밀번호, 토큰, 인증
-헤더, 쿠키와 설정된 본문 키를 마스킹합니다.
-
-브라우저의 fetch/Axios 트래픽은 Node.js preload로 가로챌 수 없습니다.
-프론트엔드 통신에는 [`examples/`](examples/README.md)의 fetch 또는 Axios
-인터셉터를 추가해야 합니다. Spring과 FastAPI 예제도 포함돼 있습니다.
-
-모든 어댑터는 `http://127.0.0.1:4319/events/network`로 이벤트를 전송하며,
-프론트엔드와 백엔드 요청을 연결하려면 `X-Dev-Blackbox-Trace-Id`를
-전파해야 합니다. collector는 외부에 노출되지 않도록 `127.0.0.1`에만
-바인딩됩니다.
-
-## 자동 보존 및 삭제
-
-자동 정리는 기록 명령 종료와 collector 시작 시 확인하고, collector가 오래
-실행되면 24시간마다 확인합니다. 매 명령마다 전체 파일을 스캔하지 않도록
-최소 실행 간격은 5분이며, 프로세스 간 maintenance lock으로 동시에 두
-prune이 실행되지 않게 합니다. collector 종료 시에는 성공 응답 본문을 바로
-제거하기 위해 마지막 강제 정리를 한 번 수행합니다.
-
-기본 보존 정책은 다음과 같습니다.
-
-- 성공 명령 세션: 3일
-- 성공 네트워크 메타데이터: 3일
-- 성공 네트워크 본문: collector 세션 종료 시 제거
-- 실패 네트워크 본문: 30일 후 제거
-- 해결됐고 고정되지 않은 인시던트와 연결 보고서: 90일
-- 미해결 또는 고정 인시던트: 자동 삭제하지 않음
-
-기본 용량 제한은 500MB입니다. 제한을 초과하면 성공 명령 세션, 성공
-네트워크 이벤트, 해결된 비고정 인시던트 순서로 정리합니다. 미해결 또는
-고정 데이터만으로 제한을 넘는 경우에는 해당 데이터를 보존합니다.
-
-수동 확인과 정리는 항상 즉시 실행되며 5분 스로틀을 적용하지 않습니다.
-
-```bash
-npx dev-blackbox storage status
-npx dev-blackbox storage prune
-npx dev-blackbox storage prune --older-than 30d
-```
-
-설정 파일은 `.dev-blackbox/config.yml`입니다.
-
-```yaml
-storage:
-  maxTotalSizeMB: 500
-retention:
-  successfulCommandDays: 3
-  resolvedIncidentDays: 90
-  successfulRequestDays: 3
-  failedRequestBodyDays: 30
-  autoPruneIntervalHours: 24
-  autoPruneMinIntervalMinutes: 5
-```
-
-## 주요 CLI
-
-```bash
-dev-blackbox init [--auto] [--script dev] [--agent-files] [--hooks claude-code]
-dev-blackbox dev [--port 4319] -- <command>
-dev-blackbox run [--timeout <초>] -- <command>
-
-dev-blackbox incident list [--format json] [--all]
-dev-blackbox incident show <ID> [--format json] [--log-lines <개수>]
-dev-blackbox incident report <ID>
-dev-blackbox incident resolve <ID>
-dev-blackbox incident pin <ID>
-
-dev-blackbox collect [--port 4319]
-dev-blackbox network list [--format json] [--trace <id>] [--failed]
-dev-blackbox network show <REQ-ID> [--format json]
-dev-blackbox network replay <REQ-ID> [--allow-unsafe] [--base-url <url>]
-dev-blackbox report network [--last 30m]
-
-dev-blackbox start --name <이름> -- <command>
-dev-blackbox process list [--format json]
-dev-blackbox process logs <이름> [--lines <개수>]
-dev-blackbox process stop <이름>
-
-dev-blackbox storage status [--format json]
-dev-blackbox storage prune [--older-than 30d]
-dev-blackbox mcp
-```
-
-잘못된 collector 포트는 실행 전에 검사하며 1부터 65535까지의 정수만
-허용합니다. `run`은 직접 실행한 자식 프로세스의 종료 코드를 전달하고,
-`dev`는 원래 개발 명령을 포그라운드에서 실행한 뒤 종료 시 collector도
-함께 닫습니다.
-
-## 저장 구조
-
-```text
-.dev-blackbox/
-├── sessions/commands-<sessionId>.jsonl
-├── incidents.jsonl
-├── network.jsonl
-├── blobs/logs/
-├── reports/
-│   ├── incidents/INC-....md
-│   ├── network/REQ-....md
-│   └── NETWORK.md
-├── processes/
-└── config.yml
-```
-
-## MCP와 Claude Code 훅
-
-```bash
-claude mcp add dev-blackbox -- npx dev-blackbox mcp
+npm i -D dev-blackbox
 npx dev-blackbox init --hooks claude-code
 ```
 
-MCP 서버는 명령 실행, 인시던트, 네트워크 조회, replay, 보고서 도구를
-제공합니다. 선택 사항인 Claude Code `PreToolUse` 훅은 감싸지 않은 빌드와
-테스트 명령을 Dev Blackbox를 통해 다시 실행하도록 안내합니다.
-
-## 개발
+그 밖의 프로젝트(Gradle, Maven, Go, Python 등)는 `package.json` 없이 전역 설치로 씁니다:
 
 ```bash
-npm install
-npm test
-npm run typecheck
-npm run build
+npm i -g dev-blackbox
+dev-blackbox init --hooks claude-code
 ```
 
-Node.js 20 이상이 필요합니다. 출력 캡처는 PTY가 아닌 pipe를 사용하며,
-Windows의 `.cmd`/`.bat` 실행 파일은 shell fallback으로 처리합니다.
+`init`은 `.dev-blackbox/`(git 제외)를 만들고, 빌드와 테스트를
+`dev-blackbox run -- <명령>`으로 실행하라는 규칙을 `CLAUDE.md`에 추가합니다.
+`--hooks claude-code`는 감싸지 않은 빌드·테스트 명령(`npm test`, `./gradlew test`,
+`cd api && pytest` 등)을 `dev-blackbox run`을 거치도록 고쳐 쓰는 hook도 등록합니다.
+에이전트가 규칙을 무시해도 동작합니다. 규칙만 원하면 이 옵션을 빼면 됩니다.
+Node.js 20 이상이 필요합니다.
+
+## 에이전트가 보는 출력
+
+명령의 출력은 그대로 흘려보냅니다. 실패하면 dev-blackbox가 인시던트를 기록하고
+끝에 짧은 요약을 덧붙입니다. 아래는 [벤치 과제 c](bench/tasks/c-vitest-shared-state)를
+세 번 실행한 결과입니다. 처음엔 그대로, 두 번째는 아무것도 바꾸지 못한 `src/format.ts`
+"수정" 뒤에, 세 번째는 수정 없이 다시 실행했습니다. 세 번째 요약을 편집 없이 옮겼습니다.
+
+```text
+✗ Command failed
+
+Incident: INC-20261005-001
+Type: PROCESS_FAILURE
+Exit code: 1
+Error: AssertionError: expected '3 items · $4,997' to be '3 items · $49.97' // Object.is equality
+At: test/pricing.test.ts:23
+Occurrences: 3 (first seen 21:51:15) — this failure happened before
+  #2 → #3: no file changes — re-run without edits
+  #1 → #2: changed src/format.ts — same failure
+Report: .dev-blackbox\reports\incidents\INC-20261005-001.md
+Details: npx dev-blackbox incident show INC-20261005-001 --format json
+```
+
+- **`Occurrences`**는 실행과 세션을 넘어 같은 실패를 셉니다. 예외 타입, 정규화한
+  메시지, 최상단 애플리케이션 프레임이 같으면 같은 실패입니다. 줄 번호는 비교에서
+  빼기 때문에 코드를 고쳐 줄이 밀려도 반복이 가려지지 않습니다.
+- **들여쓴 줄**은 git에서 나옵니다. 두 실패 실행 사이에 바뀐 파일입니다.
+  "changed `src/format.ts` — same failure"는 직전 시도가 효과가 없었다는 사실을,
+  에이전트가 같은 발상의 변형을 시도하기 전에 알려 줍니다.
+- **`Earliest cause`**는 출력의 첫 예외가 마지막 예외와 다를 때 나타납니다.
+  예를 들어 Spring이 진짜 `NumberFormatException`을 한 번 찍고, 그 뒤로 수천 줄의
+  "ApplicationContext failure threshold exceeded"를 쏟아내는 경우입니다.
+  dev-blackbox는 마지막 부분만이 아니라 출력 전체를 따라가며 첫 예외 체인의 가장 깊은
+  원인을 보관합니다.
+
+`incident show <ID> --format json`은 다시 실행하지 않고 시도 내역과 원인 발췌를 포함한
+전체 기록을 돌려줍니다. 인시던트는 `.dev-blackbox/`에 남기 때문에 다음 세션도 이 기록에서
+시작합니다. 같은 명령이 성공하면 해당 인시던트는 해결 후보로 표시됩니다.
+
+## FAQ
+
+### 그냥 `| tail -50` 하면 되지 않나요?
+
+`tail`은 이번 실행의 마지막 50줄만 보여 줍니다. 같은 실패가 벌써 두 번째 반복이라는 것,
+방금 고친 파일이 아무 차이도 만들지 못했다는 것, 4,000줄 위의 첫 예외가 무엇이었는지는
+알려 주지 못하고, 세션이 끝나면 사라집니다. dev-blackbox는 실패마다 마지막 1,000줄을
+마스킹·압축해 fingerprint별로 저장하고, 실행과 세션을 넘어 반복 횟수를 세며,
+`incident list`와 `incident show`로 JSON을 제공합니다.
+
+앞부분 원인 추적은 예외 체인을 대상으로 합니다(Java/Kotlin `Caused by:`, Gradle의
+full exception 형식 포함, JVM uncaught exception, JS/Python 에러).
+[벤치 과제 b](bench/tasks/b-gradle-noisy-log)가 이 경우를 다룹니다. 예외가 아닌 원인,
+예를 들어 평범한 로그 한 줄은 여전히 마지막 구간 밖으로 밀려날 수 있습니다.
+
+### 데이터를 어디로 보내나요?
+
+보내지 않습니다. 모든 기록은 프로젝트 안 `.dev-blackbox/`에만 쓰이고, `init`이
+이 폴더를 `.gitignore`에 추가합니다. 텔레메트리도, 계정도 없습니다. 선택 기능인
+네트워크 collector는 `127.0.0.1`에만 바인딩합니다. 디스크에 쓰기 전에 비밀 값을
+마스킹합니다. 대상은 password·token·secret·API key 필드, `Authorization` 헤더, 쿠키,
+Bearer 토큰, 개인 키 블록, 그리고 `.dev-blackbox/config.yml`에 지정한 본문 키입니다.
+
+### 어떤 에이전트를 지원하나요?
+
+- **Claude Code**: `CLAUDE.md` 규칙과 선택적 `PreToolUse` hook
+  (`init --hooks claude-code`). hook은 빌드·테스트 명령을 dev-blackbox를 거치도록
+  고쳐 씁니다. 고쳐 쓴 명령도 평소 권한 설정을 그대로 거치며, hook이 스스로 승인하는 일은 없습니다.
+- **Codex, Cursor, Windsurf 등** `AGENTS.md`, `.cursorrules`, `.windsurfrules`를 읽는
+  에이전트: `init --agent-files`로 같은 규칙을 추가합니다. hook이 없으므로 에이전트가
+  규칙을 따르는지에 달려 있습니다.
+- **MCP 클라이언트**: `npx dev-blackbox mcp` (고급 사용법 참고).
+- **셸 명령을 실행할 수 있는 모든 도구**: CLI를 직접 호출하면 됩니다.
+
+## 고급 기능
+
+네트워크 수집, 요청 replay, 백그라운드 프로세스, MCP 서버, 보존 정책, 전체 CLI는
+[docs/advanced.md](docs/advanced.md)(영문)에 정리되어 있습니다.
+
+## 라이선스
+
+MIT

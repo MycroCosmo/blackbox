@@ -1,6 +1,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { StringDecoder } from "node:string_decoder";
 import stripAnsi from "strip-ansi";
 import { loadConfig, type BlackboxConfig } from "./config.js";
 import { detectSoftSignals } from "./detection.js";
@@ -115,8 +116,11 @@ export async function superviseProcess(
   name: string,
   argv: string[],
 ): Promise<number> {
-  const redactor = new Redactor(config.security.redactBodyKeys);
-  const command = redactor.redactCommand(argv);
+  const command = new Redactor(config.security.redactBodyKeys).redactCommand(argv);
+  const streamRedactors = {
+    stdout: new Redactor(config.security.redactBodyKeys),
+    stderr: new Redactor(config.security.redactBodyKeys),
+  };
   const buffer = new RingBuffer(config.ringBuffer);
   const log = logFile(storage, name);
   let loggedBytes = 0;
@@ -160,22 +164,23 @@ export async function superviseProcess(
 
   const capture = (stream: "stdout" | "stderr") => {
     let tail = "";
+    const decoder = new StringDecoder("utf8");
+    const redactor = streamRedactors[stream];
     const record = (raw: string) => {
-        const line = redactor.redactStreamLine(stripAnsi(raw));
-        buffer.push(line, stream);
-        appendLog(`[${stream}] ${line}`);
+      const line = redactor.redactStreamLine(stripAnsi(raw));
+      buffer.push(line, stream);
+      appendLog(`[${stream}] ${line}`);
     };
     return {
       data: (chunk: Buffer) => {
-        const parts = (tail + chunk.toString("utf8")).split(/\r?\n/);
+        const parts = (tail + decoder.write(chunk)).split(/\r?\n/);
         tail = parts.pop() ?? "";
         for (const raw of parts) record(raw);
       },
       flush: () => {
-        if (tail === "") return;
-        const raw = tail;
+        const raw = tail + decoder.end();
         tail = "";
-        record(raw);
+        if (raw !== "") record(raw);
       },
     };
   };

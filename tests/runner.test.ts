@@ -116,6 +116,19 @@ describe("timeout handling", () => {
     expect(inc.kind).toBe("TIMEOUT");
     expect(inc.timedOut).toBe(true);
   }, 15_000);
+
+  it.runIf(process.platform === "win32")("kills descendants in the timed-out process tree", async () => {
+    const marker = path.join(dir, "descendant-marker.txt");
+    const fixture = path.resolve("tests", "fixtures", "timeout-tree.cjs");
+    const started = Date.now();
+
+    const outcome = await run([node, fixture, "parent", marker], 200);
+    expect(outcome.exitCode).not.toBe(0);
+    expect(Date.now() - started).toBeLessThan(1_000);
+
+    await new Promise((resolve) => setTimeout(resolve, 1_200));
+    expect(fs.existsSync(marker)).toBe(false);
+  }, 15_000);
 });
 
 describe("large output (spec 15: 대량 stdout)", () => {
@@ -132,6 +145,32 @@ describe("large output (spec 15: 대량 stdout)", () => {
     expect(log.split("\n").length).toBeLessThanOrEqual(DEFAULT_CONFIG.ringBuffer.maxLines + 1);
     expect(log).toContain("TypeError: at the end");
   }, 30_000);
+
+  it("still finds an exception that heavy stdout evicted from the ring buffer", async () => {
+    // The exception is written FIRST, then flooded out of the buffer. The
+    // stderr-only tail is the fallback source — scanned as its own sequence,
+    // never spliced onto the buffer, so its stack frame stays correct.
+    const outcome = await run([
+      node,
+      "-e",
+      "console.error('TypeError: evicted boom');" +
+        "console.error('    at handler (/app/src/early.js:7:3)');" +
+        "for (let i=0;i<200000;i++) console.log('filler '+i);" +
+        "process.exit(1)",
+    ]);
+    expect(outcome.exitCode).toBe(1);
+
+    const inc = storage.findIncident(outcome.incidentId!)!;
+    expect(inc.errorType).toBe("TypeError");
+    expect(inc.message).toContain("evicted boom");
+    expect(inc.lastLocation?.file).toBe("/app/src/early.js");
+
+    const log = storage.readLogBlob(inc.logBlob!)!;
+    expect(log).toContain("earlier stderr");
+    expect(log).toContain("TypeError: evicted boom");
+    // Preserving the tail must not grow the blob past the configured budget.
+    expect(log.split("\n").length).toBeLessThanOrEqual(DEFAULT_CONFIG.ringBuffer.maxLines);
+  }, 30_000);
 });
 
 describe("secret masking end to end (spec 8)", () => {
@@ -145,6 +184,21 @@ describe("secret masking end to end (spec 8)", () => {
     const log = storage.readLogBlob(inc.logBlob!)!;
     expect(log).not.toContain("hunter2");
     expect(log).toContain("[REDACTED]");
+  });
+
+  it("keeps private-key redaction state isolated between stdout and stderr", async () => {
+    const outcome = await run([
+      node,
+      "-e",
+      "process.stdout.write('-----BEGIN PRIVATE KEY-----\\n');" +
+        "setTimeout(()=>process.stderr.write('-----BEGIN PRIVATE KEY-----\\n'),10);" +
+        "setTimeout(()=>process.stderr.write('-----END PRIVATE KEY-----\\n'),20);" +
+        "setTimeout(()=>process.stdout.write('private-key-material-should-never-persist\\n'),30);" +
+        "setTimeout(()=>process.stdout.write('-----END PRIVATE KEY-----\\n'),40);" +
+        "setTimeout(()=>{console.error('TypeError: boom');process.exit(1)},50)",
+    ]);
+    const log = storage.readLogBlob(storage.findIncident(outcome.incidentId!)!.logBlob!)!;
+    expect(log).not.toContain("private-key-material-should-never-persist");
   });
 
   it("secrets passed as command arguments never reach metadata or reports", async () => {
@@ -165,6 +219,21 @@ describe("secret masking end to end (spec 8)", () => {
       expect(persisted).not.toContain("abc123");
       expect(persisted).toContain("[REDACTED]");
     }
+  });
+});
+
+describe("stream decoding", () => {
+  it("preserves UTF-8 characters split across child-process chunks", async () => {
+    const outcome = await run([
+      node,
+      "-e",
+      "const b=Buffer.from('한글🙂\\n');let i=0;const t=setInterval(()=>{" +
+        "process.stderr.write(b.subarray(i,i+1));" +
+        "if(++i===b.length){clearInterval(t);setTimeout(()=>process.exit(1),20)}},5)",
+    ]);
+    const log = storage.readLogBlob(storage.findIncident(outcome.incidentId!)!.logBlob!)!;
+    expect(log).toContain("한글🙂");
+    expect(log).not.toContain("�");
   });
 });
 

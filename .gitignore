@@ -3,5 +3,6 @@ dist/
 .dev-blackbox/
 graphify-out/
 smoke-project/
+demo-project/
 .agents/
 *.log

@@ -51,6 +51,7 @@ describe("recordFailure", () => {
     expect(second.occurrenceCount).toBe(2);
     expect(second.lastLocation?.line).toBe(97); // latest line kept as detail
     expect(storage.readIncidents()).toHaveLength(1);
+    expect(fs.readdirSync(storage.blobsDir)).toEqual([`${first.incidentId}.log.gz`]);
   });
 
   it("creates separate incidents for different errors", () => {

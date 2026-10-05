@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { detectSoftSignals } from "../src/detection.js";
+import { bestSoftSignal, detectSoftSignals } from "../src/detection.js";
 
 describe("detectSoftSignals", () => {
   it("detects a JS TypeError with an application stack frame", () => {
@@ -62,8 +62,51 @@ describe("detectSoftSignals", () => {
     expect(first!.errorType).toBe("TypeError");
   });
 
+  it("detects application errors behind Playwright webServer prefixes", () => {
+    const lines = [
+      "[WebServer] TypeError: Cannot read properties of undefined (reading 'available')",
+      "[WebServer]     at file:///app/src/inventory-service.mjs:8:15",
+      "[WebServer]     at buildReservationPlan (file:///app/src/inventory-service.mjs:4:16)",
+      "1 failed",
+    ];
+
+    const [signal] = detectSoftSignals(lines);
+    expect(signal).toMatchObject({
+      errorType: "TypeError",
+      location: { file: "file:///app/src/inventory-service.mjs", line: 8 },
+    });
+  });
+
   it("does not fire on ordinary text mentioning error-ish words", () => {
     const lines = ["all good", "checking error handling paths...", "done in 3s"];
     expect(detectSoftSignals(lines)).toHaveLength(0);
+  });
+});
+
+describe("bestSoftSignal", () => {
+  it("never reads a stack frame across a group boundary", () => {
+    // The error ends the stderr tail; the ring buffer happens to START with an
+    // unrelated frame. Concatenating the two groups used to attach that frame
+    // to the error, producing a wrong location — and so a wrong fingerprint.
+    const stderrTail = ["TypeError: boom"];
+    const ringBuffer = ["    at unrelated (/app/src/other.js:99:1)", "plain output"];
+
+    expect(bestSoftSignal(ringBuffer, stderrTail)?.location).toBeUndefined();
+    // Sanity check that the spliced form really did produce the bad location.
+    expect(detectSoftSignals([...stderrTail, ...ringBuffer])[0]?.location?.file).toBe(
+      "/app/src/other.js",
+    );
+  });
+
+  it("prefers the stronger signal regardless of which group holds it", () => {
+    const summaryOnly = ["Tests: 1 failed, 3 passed"];
+    const located = ["TypeError: boom", "    at run (/app/src/x.js:3:1)"];
+    expect(bestSoftSignal(summaryOnly, located)?.errorType).toBe("TypeError");
+    expect(bestSoftSignal(located, summaryOnly)?.errorType).toBe("TypeError");
+  });
+
+  it("keeps the earlier group on a tie and ignores empty groups", () => {
+    expect(bestSoftSignal(["Tests: 1 failed"], ["Tests: 9 failed"])?.message).toBe("Tests: 1 failed");
+    expect(bestSoftSignal([], ["nothing to see"])).toBeUndefined();
   });
 });

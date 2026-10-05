@@ -159,7 +159,11 @@ export function shouldStore(
 ): boolean {
   if (isFailure(classification)) return true;
   const route = urlPath(url);
-  const rule = config.sampling.rules.find((r) => route.startsWith(r.route));
+  // Longest prefix wins, so a specific rule (/api/health) is never shadowed by
+  // a broader one (/api) that happens to be listed first.
+  const rule = config.sampling.rules
+    .filter((r) => route.startsWith(r.route))
+    .sort((a, b) => b.route.length - a.route.length)[0];
   const rate = rule ? rule.rate : config.sampling.defaultRate;
   if (rate >= 1) return true;
   if (rate <= 0) return false;
@@ -179,6 +183,14 @@ const BINARY_CONTENT_TYPES =
 // A large unbroken base64-charset string that also uses base64-specific
 // characters (+ / =). Plain long text (e.g. "aaaa…") must NOT match.
 const BASE64_BLOB_RE = /^(?=[\s\S]*[+/=])[A-Za-z0-9+/=\r\n]{10000,}$/;
+
+/** Truncates at a byte budget without splitting a multi-byte character.
+ *  Streaming mode holds back an incomplete trailing sequence instead of
+ *  emitting U+FFFD, so a cut mid-emoji drops the character rather than
+ *  corrupting it. */
+function sliceUtf8(buf: Buffer, maxBytes: number): string {
+  return new TextDecoder("utf-8").decode(buf.subarray(0, maxBytes), { stream: true });
+}
 
 function contentType(headers?: Record<string, string>): string {
   if (!headers) return "";
@@ -205,7 +217,7 @@ export function processBody(
   const serialized = typeof redacted === "string" ? redacted : JSON.stringify(redacted);
   const originalBytes = Buffer.byteLength(serialized, "utf8");
   if (originalBytes <= maxBytes) return { body: redacted };
-  const captured = Buffer.from(serialized, "utf8").subarray(0, maxBytes).toString("utf8");
+  const captured = sliceUtf8(Buffer.from(serialized, "utf8"), maxBytes);
   return {
     body: captured,
     meta: { truncated: true, capturedBytes: Buffer.byteLength(captured, "utf8"), originalBytes },

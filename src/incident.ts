@@ -1,12 +1,15 @@
-import { fingerprintFromError, fingerprintFromProcess, normalizeMessage } from "./fingerprint.js";
+import { fingerprintFromError, fingerprintFromProcess, normalizeRoutePath } from "./fingerprint.js";
 import type { NetworkRecord } from "./network.js";
 import type { Storage } from "./storage.js";
+import type { RootCause } from "./detection.js";
 import { SCHEMA_VERSION } from "./types.js";
 import type {
+  IncidentAttempt,
   IncidentKind,
   IncidentRecord,
   SoftSignal,
 } from "./types.js";
+import { changedFiles, type WorkspaceSnapshot } from "./workspace.js";
 
 /** Incident creation and fingerprint-based merging (spec 4.4).
  *  A recurring fingerprint updates the existing incident (occurrence count,
@@ -20,8 +23,48 @@ export interface FailureContext {
   signal: string | null;
   timedOut: boolean;
   softSignal?: SoftSignal;
+  /** Deepest cause of the first exception chain anywhere in the output. */
+  rootCause?: RootCause;
+  /** Git workspace state when the command finished (undefined outside git). */
+  workspace?: WorkspaceSnapshot;
   logText: string;
   now?: Date;
+}
+
+const MAX_ATTEMPTS = 10;
+const MAX_ATTEMPT_FILES = 20;
+
+/** What changed in the workspace between the previous occurrence and this one. */
+function nextAttempt(existing: IncidentRecord, ctx: FailureContext, now: string): IncidentAttempt {
+  const occurrence = existing.occurrenceCount + 1;
+  if (!existing.lastWorkspace || !ctx.workspace) return { occurrence, at: now, changedFiles: null };
+  let files: string[];
+  try {
+    files = changedFiles(ctx.cwd, existing.lastWorkspace, ctx.workspace);
+  } catch {
+    return { occurrence, at: now, changedFiles: null };
+  }
+  return files.length > MAX_ATTEMPT_FILES
+    ? { occurrence, at: now, changedFiles: files.slice(0, MAX_ATTEMPT_FILES), changedCount: files.length }
+    : { occurrence, at: now, changedFiles: files };
+}
+
+function storedRootCause(rc: RootCause | undefined): IncidentRecord["rootCause"] {
+  if (!rc) return undefined;
+  return {
+    errorType: rc.errorType,
+    message: rc.message,
+    ...(rc.location ? { location: rc.location } : {}),
+    outputLine: rc.outputLine,
+    excerpt: rc.excerpt.slice(0, 10),
+  };
+}
+
+/** The incident as shown to agents: drops internal bookkeeping (the
+ *  workspace snapshot can list hundreds of file hashes). */
+export function publicIncident(inc: IncidentRecord): Omit<IncidentRecord, "lastWorkspace"> {
+  const { lastWorkspace: _internal, ...rest } = inc;
+  return rest;
 }
 
 export function classifyKind(ctx: FailureContext): IncidentKind {
@@ -89,6 +132,9 @@ function recordFailureLocked(storage: Storage, ctx: FailureContext): IncidentRec
       message: s?.message || existing.message,
       facts: buildFacts(ctx, kind),
       resolvedAt: undefined,
+      rootCause: storedRootCause(ctx.rootCause),
+      lastWorkspace: ctx.workspace,
+      attempts: [...(existing.attempts ?? []), nextAttempt(existing, ctx, now)].slice(-MAX_ATTEMPTS),
     };
     storage.appendIncident(updated);
     return updated;
@@ -116,6 +162,8 @@ function recordFailureLocked(storage: Storage, ctx: FailureContext): IncidentRec
     logBlob,
     facts: buildFacts(ctx, kind),
     hypotheses: [],
+    ...(ctx.rootCause ? { rootCause: storedRootCause(ctx.rootCause) } : {}),
+    ...(ctx.workspace ? { lastWorkspace: ctx.workspace } : {}),
   };
   storage.appendIncident(record);
   return record;
@@ -138,7 +186,7 @@ function recordNetworkFailureLocked(storage: Storage, record: NetworkRecord): In
       return record.url;
     }
   })();
-  const fingerprint = ["NETWORK", record.classification, record.method, normalizeMessage(pathOnly)].join("|");
+  const fingerprint = ["NETWORK", record.classification, record.method, normalizeRoutePath(pathOnly)].join("|");
   const errorType =
     record.classification === "http_error" && record.status != null
       ? `HTTP_${record.status}`

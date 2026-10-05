@@ -14,12 +14,17 @@ const QUOTED_RE = /(["'`])(?:\\.|(?!\1).)*\1/g;
 const WIN_PATH_RE = /[A-Za-z]:\\[^\s:'"`)]+/g;
 const UNIX_PATH_RE = /(?:^|[\s('"`])((?:\/[\w.-]+){2,})/g;
 const NUMBER_RE = /\b\d+\b/g;
+// Java's default toString(): `MergedContextConfiguration@30c1da48`. The hash
+// changes on every JVM start, so without this every Spring context failure
+// would look like a new incident.
+const IDENTITY_HASH_RE = /([A-Za-z_$][\w$]*)@[0-9a-f]{1,8}\b/g;
 
 /** Replaces volatile values (ids, numbers, paths, quoted args) with
  *  placeholders so the same logical error always produces the same message. */
 export function normalizeMessage(message: string): string {
   return message
     .replace(UUID_RE, "<id>")
+    .replace(IDENTITY_HASH_RE, "$1@<hex>")
     .replace(HEX_RE, "<hex>")
     .replace(LONG_HEX_RE, "<hex>")
     .replace(WIN_PATH_RE, (m) => `<path:${path.basename(m)}>`)
@@ -27,6 +32,19 @@ export function normalizeMessage(message: string): string {
     .replace(QUOTED_RE, "<str>")
     .replace(NUMBER_RE, "<n>")
     .trim();
+}
+
+/** Normalizes volatile values within each URL path segment without letting
+ * the generic Unix-path rule collapse the whole route to its basename.
+ * Thus `/api/todos/42` and `/api/todos/977` merge, while `/charge/42` and
+ * `/refund/42` remain distinct incidents. */
+export function normalizeRoutePath(route: string): string {
+  return route
+    .split("/")
+    // An API version is part of the route's identity, not a volatile id:
+    // /api/v1/users and /api/v2/users are different endpoints.
+    .map((segment) => (/^v\d+$/i.test(segment) ? segment : normalizeMessage(segment)))
+    .join("/");
 }
 
 export function fingerprintFromError(

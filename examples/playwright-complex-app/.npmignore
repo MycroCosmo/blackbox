@@ -1,0 +1,4 @@
+node_modules/
+.dev-blackbox/
+test-results/
+playwright-report/

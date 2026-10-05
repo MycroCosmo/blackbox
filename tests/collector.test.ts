@@ -89,12 +89,46 @@ describe("collector server", () => {
   it("rejects invalid payloads without crashing", async () => {
     const bad = await fetch(`http://127.0.0.1:${collector.port}/events/network`, {
       method: "POST",
+      headers: { "content-type": "application/json" },
       body: "not json{{",
     });
     expect(bad.status).toBe(400);
     const missing = await (await post({ request: { method: "GET" } })).status;
     expect(missing).toBe(400);
     expect((await fetch(`http://127.0.0.1:${collector.port}/nope`)).status).toBe(404);
+  });
+
+  it("rejects browser-simple and remote-origin event injection", async () => {
+    const plain = await fetch(`http://127.0.0.1:${collector.port}/events/network`, {
+      method: "POST",
+      headers: { origin: "https://evil.example", "content-type": "text/plain" },
+      body: JSON.stringify(event()),
+    });
+    expect(plain.status).toBe(403);
+
+    const wrongType = await fetch(`http://127.0.0.1:${collector.port}/events/network`, {
+      method: "POST",
+      headers: { "content-type": "text/plain" },
+      body: JSON.stringify(event()),
+    });
+    expect(wrongType.status).toBe(415);
+    expect(storage.readNetwork()).toHaveLength(0);
+    expect(storage.readIncidents()).toHaveLength(0);
+  });
+
+  it("allows CORS preflight only from loopback origins", async () => {
+    const allowed = await fetch(`http://127.0.0.1:${collector.port}/events/network`, {
+      method: "OPTIONS",
+      headers: { origin: "http://localhost:3000" },
+    });
+    expect(allowed.status).toBe(204);
+    expect(allowed.headers.get("access-control-allow-origin")).toBe("http://localhost:3000");
+
+    const rejected = await fetch(`http://127.0.0.1:${collector.port}/events/network`, {
+      method: "OPTIONS",
+      headers: { origin: "https://evil.example" },
+    });
+    expect(rejected.status).toBe(403);
   });
 
   it("masks secrets before they reach disk (spec 8)", async () => {

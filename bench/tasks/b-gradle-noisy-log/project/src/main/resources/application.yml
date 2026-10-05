@@ -1,0 +1,10 @@
+spring:
+  application:
+    name: pricing-service
+  main:
+    banner-mode: off
+
+pricing:
+  default-currency: KRW
+  vat-rate: 10%
+  rounding-scale: 0

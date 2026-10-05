@@ -59,6 +59,25 @@ describe("session files (single-writer per run)", () => {
     ]);
     expect(storage.readCommands()).toHaveLength(2);
   });
+
+  it("keeps only the configured number of recent session files", () => {
+    const base = {
+      schemaVersion: SCHEMA_VERSION,
+      command: "npm test",
+      cwd: dir,
+      startedAt: new Date().toISOString(),
+      endedAt: new Date().toISOString(),
+      durationMs: 5,
+      exitCode: 1,
+      signal: null,
+      timedOut: false,
+    };
+    for (let i = 0; i < 5; i++) {
+      storage.appendCommand({ ...base, sessionId: `s${i}` }, 3);
+    }
+    expect(fs.readdirSync(storage.sessionsDir)).toHaveLength(3);
+    expect(storage.readCommands()).toHaveLength(3);
+  });
 });
 
 describe("Storage.discover", () => {
@@ -190,6 +209,57 @@ describe("prune", () => {
       expect(result.removedSessionFiles).toBe(0);
       expect(other.readCommands()).toHaveLength(1);
     });
+  });
+
+  it("recovers a lock left by a dead process without leaving the recovery guard", () => {
+    storage.ensureDirs();
+    fs.writeFileSync(
+      storage.incidentsLockFile,
+      JSON.stringify({ pid: 2_147_483_647, token: "dead-owner" }),
+      "utf8",
+    );
+
+    expect(storage.withIncidentLock(() => "acquired")).toBe("acquired");
+    expect(fs.existsSync(storage.incidentsLockFile)).toBe(false);
+    expect(fs.existsSync(`${storage.incidentsLockFile}.recovery`)).toBe(false);
+  });
+
+  it("clears a recovery guard abandoned by a dead process", () => {
+    storage.ensureDirs();
+    // A recovery owner that died mid-cleanup: the guard survives it. Without
+    // staleness handling every later acquisition waits out the full timeout
+    // and then throws, permanently — incidents stop being recorded.
+    fs.writeFileSync(
+      `${storage.incidentsLockFile}.recovery`,
+      JSON.stringify({ pid: 2_147_483_647, startedAt: new Date().toISOString() }),
+      "utf8",
+    );
+
+    const startedAt = Date.now();
+    expect(storage.withIncidentLock(() => "acquired")).toBe("acquired");
+    expect(Date.now() - startedAt).toBeLessThan(2_000); // not the 10s timeout
+    expect(fs.existsSync(`${storage.incidentsLockFile}.recovery`)).toBe(false);
+  });
+
+  it("clears an unreadable recovery guard once it ages out", () => {
+    storage.ensureDirs();
+    // No parseable pid (a torn write), so only the age check can free it.
+    const guard = `${storage.maintenanceLockFile}.recovery`;
+    fs.writeFileSync(guard, "not json", "utf8");
+    const old = Date.now() - 60_000;
+    fs.utimesSync(guard, old / 1000, old / 1000);
+
+    expect(storage.withMaintenanceLock(() => "acquired")).toBe("acquired");
+    expect(fs.existsSync(guard)).toBe(false);
+  });
+
+  it("does not skip a maintenance pass because a live recovery guard exists", () => {
+    storage.ensureDirs();
+    // A guard owned by THIS (live) process must still be respected.
+    const guard = `${storage.maintenanceLockFile}.recovery`;
+    fs.writeFileSync(guard, JSON.stringify({ pid: process.pid }), "utf8");
+    expect(storage.withMaintenanceLock(() => "acquired", false)).toBeUndefined();
+    expect(fs.existsSync(guard)).toBe(true);
   });
 
   it("serializes concurrent cross-process prune operations", async () => {

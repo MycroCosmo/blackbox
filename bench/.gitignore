@@ -1,0 +1,4 @@
+results/raw/
+tasks/*/project/build/
+tasks/*/project/.gradle/
+tasks/*/project/node_modules/

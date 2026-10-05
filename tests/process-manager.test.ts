@@ -91,6 +91,27 @@ describe("superviseProcess", () => {
       message: "unterminated failure",
     });
   }, 20_000);
+
+  it("isolates stream redaction state and preserves split UTF-8", async () => {
+    seedMeta("streams", process.pid);
+    const code = await superviseProcess(storage, DEFAULT_CONFIG, "streams", [
+      node,
+      "-e",
+      "process.stdout.write('-----BEGIN PRIVATE KEY-----\\n');" +
+        "setTimeout(()=>process.stderr.write('-----BEGIN PRIVATE KEY-----\\n'),10);" +
+        "setTimeout(()=>process.stderr.write('-----END PRIVATE KEY-----\\n'),20);" +
+        "setTimeout(()=>process.stdout.write('private-key-material-should-never-persist\\n'),30);" +
+        "setTimeout(()=>process.stdout.write('-----END PRIVATE KEY-----\\n'),40);" +
+        "setTimeout(()=>{const b=Buffer.from('한글🙂\\n');let i=0;const t=setInterval(()=>{" +
+        "process.stdout.write(b.subarray(i,i+1));" +
+        "if(++i===b.length){clearInterval(t);setTimeout(()=>process.exit(0),20)}},5)},50)",
+    ]);
+    const logs = readProcessLogs(storage, "streams").join("\n");
+    expect(code).toBe(0);
+    expect(logs).not.toContain("private-key-material-should-never-persist");
+    expect(logs).toContain("한글🙂");
+    expect(logs).not.toContain("�");
+  }, 20_000);
 });
 
 describe("listProcesses / stopProcess", () => {

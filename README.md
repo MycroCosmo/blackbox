@@ -1,212 +1,126 @@
-# Dev Blackbox
+# dev-blackbox
 
-[한국어 문서](README.ko.md)
+**Stop your AI coding agent from going in circles.**
 
-A local flight recorder for AI coding agents. Dev Blackbox runs a project's
-development command with terminal recording and a loopback-only network
-collector, then turns failures into redacted, structured incidents and
-regenerated Markdown reports.
+[한국어](README.ko.md) · [Benchmark](bench/README.md) · [Advanced usage](docs/advanced.md)
 
-## Install and attach
+- Your agent "fixes" the same error again and again, because every failing run looks new to it.
+- It re-reads thousands of lines of build output to find the one line that matters.
+- When the session ends, everything it learned about the failure is gone.
 
-```bash
-npm install --save-dev dev-blackbox
-npx dev-blackbox init --auto
-npm run dev
-```
+<!-- DEMO_GIF -->
 
-`init --auto` is explicit because dependencies should not silently rewrite a
-consumer's `package.json`. It:
+<!-- BENCH_TABLE -->
 
-- creates `.dev-blackbox/config.yml` and adds `.dev-blackbox/` to `.gitignore`;
-- writes agent rules to `CLAUDE.md` and `AGENTS.md`;
-- preserves the existing `dev` command as `dev:original`;
-- changes `dev` to `dev-blackbox dev -- npm run dev:original`.
+How this was measured, every individual run, and how to reproduce it: [bench/](bench/README.md).
 
-Automatic wrapping requires a local installation. If
-`node_modules/.bin/dev-blackbox` is missing, initialization leaves
-`package.json` unchanged and prints the exact install command instead of
-creating a broken script.
+## Quick start
 
-For another npm script, use `npx dev-blackbox init --auto --script start`.
-Existing backup scripts are never overwritten, and repeated initialization is
-idempotent.
-
-After attachment, the normal command starts everything together:
-
-```text
-npm run dev
-  -> Dev Blackbox recorder
-     -> local collector on 127.0.0.1:4319
-     -> original project dev command
-     -> Node.js fetch instrumentation
-```
-
-## Failure reports
-
-Process, build, and test failures create a deduplicated incident:
-
-```text
-.dev-blackbox/reports/incidents/INC-20260718-001.md
-```
-
-Failed recorded network requests create and link these views:
-
-```text
-.dev-blackbox/reports/incidents/INC-20260718-002.md
-.dev-blackbox/reports/network/REQ-20260718-001.md
-.dev-blackbox/reports/NETWORK.md
-```
-
-Failure-specific `INC-...md` and `REQ-...md` files are written immediately.
-The aggregate `NETWORK.md` view is refreshed at most once every five seconds
-and flushed when the collector stops, avoiding a full JSONL scan per request.
-
-Markdown files are regenerated views. JSONL records and compressed redacted
-logs are the source of truth used by query commands and agents.
-
-## AI agent workflow
-
-The generated agent rules tell an agent to inspect existing evidence before a
-bug fix:
+Node projects:
 
 ```bash
-npx dev-blackbox incident list --format json
-npx dev-blackbox incident show <INC-ID> --format json
-npx dev-blackbox network list --failed --format json
-npx dev-blackbox network show <REQ-ID> --format json
-```
-
-The agent should then fix the code, run the same command through Dev Blackbox,
-and resolve the incident after verification. Reports are evidence, not a
-substitute for source inspection or reproduction when the evidence is
-insufficient.
-
-## Network capture
-
-Attached `dev` sessions automatically instrument Node.js global `fetch`
-without consuming request or response streams. HTTP failures, network errors,
-timeouts reported by adapters, empty responses, and registered contract
-mismatches can become network incidents.
-
-Browser traffic cannot be intercepted by a Node.js preload. Add the fetch or
-Axios adapter from [`examples/`](examples/README.md) for frontend traffic.
-Spring and FastAPI examples are also included. All adapters POST to the local
-collector at `http://127.0.0.1:4319/events/network` and should propagate
-`X-Dev-Blackbox-Trace-Id` to link frontend and backend events.
-
-The collector binds to `127.0.0.1` only. Secrets, authorization headers,
-cookies, and configured body keys are redacted before persistence. Bodies are
-size-capped and binary payloads are excluded.
-
-## Automatic retention
-
-Automatic retention is checked after recorded commands, when a collector
-starts, and every 24 hours while a collector remains active. Checks are
-throttled to once every five minutes and serialized by a cross-process
-maintenance lock. Collector shutdown performs one final forced pass so
-successful response bodies are stripped promptly. Defaults are:
-
-- successful command sessions: 3 days;
-- successful network metadata: 3 days;
-- successful network bodies: stripped when the collector session ends;
-- failed network bodies: stripped after 30 days;
-- resolved, unpinned incidents and linked reports: 90 days;
-- open or pinned incidents: never automatically deleted.
-
-The 500 MB default size cap is enforced by removing disposable command
-sessions, successful network events, and resolved unpinned incidents in that
-order. Protected open or pinned data may intentionally exceed the cap.
-
-Manual inspection and cleanup remain available:
-
-```bash
-npx dev-blackbox storage status
-npx dev-blackbox storage prune
-npx dev-blackbox storage prune --older-than 30d
-```
-
-Configuration lives at `.dev-blackbox/config.yml`:
-
-```yaml
-storage:
-  maxTotalSizeMB: 500
-retention:
-  successfulCommandDays: 3
-  resolvedIncidentDays: 90
-  successfulRequestDays: 3
-  failedRequestBodyDays: 30
-  autoPruneIntervalHours: 24
-  autoPruneMinIntervalMinutes: 5
-```
-
-## CLI
-
-```bash
-dev-blackbox init [--auto] [--script dev] [--agent-files] [--hooks claude-code]
-dev-blackbox dev [--port 4319] -- <command>
-dev-blackbox run [--timeout <seconds>] -- <command>
-
-dev-blackbox incident list [--format json] [--all]
-dev-blackbox incident show <ID> [--format json] [--log-lines <n>]
-dev-blackbox incident report <ID>
-dev-blackbox incident resolve <ID>
-dev-blackbox incident pin <ID>
-
-dev-blackbox collect [--port 4319]
-dev-blackbox network list [--format json] [--trace <id>] [--failed]
-dev-blackbox network show <REQ-ID> [--format json]
-dev-blackbox network replay <REQ-ID> [--allow-unsafe] [--base-url <url>]
-dev-blackbox report network [--last 30m]
-
-dev-blackbox start --name <name> -- <command>
-dev-blackbox process list [--format json]
-dev-blackbox process logs <name> [--lines <n>]
-dev-blackbox process stop <name>
-
-dev-blackbox storage status [--format json]
-dev-blackbox storage prune [--older-than 30d]
-dev-blackbox mcp
-```
-
-`run` propagates the direct child exit code. `dev` keeps the original project
-command in the foreground and shuts down the collector when it exits.
-
-## Storage layout
-
-```text
-.dev-blackbox/
-├── sessions/commands-<sessionId>.jsonl
-├── incidents.jsonl
-├── network.jsonl
-├── blobs/logs/
-├── reports/
-│   ├── incidents/INC-....md
-│   ├── network/REQ-....md
-│   └── NETWORK.md
-├── processes/
-└── config.yml
-```
-
-## MCP and Claude Code hook
-
-```bash
-claude mcp add dev-blackbox -- npx dev-blackbox mcp
+npm i -D dev-blackbox
 npx dev-blackbox init --hooks claude-code
 ```
 
-The MCP server exposes command, incident, network, replay, and report tools.
-The optional Claude Code `PreToolUse` hook redirects unwrapped build and test
-commands through Dev Blackbox.
-
-## Development
+Any other project (Gradle, Maven, Go, Python, …), no `package.json` needed:
 
 ```bash
-npm install
-npm test
-npm run typecheck
-npm run build
+npm i -g dev-blackbox
+dev-blackbox init --hooks claude-code
 ```
 
-Node.js 20 or newer is required. Capture uses pipes rather than a PTY, and
-Windows `.cmd`/`.bat` shims use a shell fallback.
+`init` creates `.dev-blackbox/` (git-ignored) and adds rules to `CLAUDE.md`
+telling the agent to run builds and tests through `dev-blackbox run -- <command>`.
+`--hooks claude-code` also registers a hook that rewrites unwrapped build and
+test commands (`npm test`, `./gradlew test`, `cd api && pytest`, …) to go
+through `dev-blackbox run`, so it works even when the agent ignores the rules.
+Leave it out for the rules only. Requires Node.js 20+.
+
+## What the agent sees
+
+The command's output streams through unchanged. When it fails, dev-blackbox
+records an incident and appends a short summary. This is
+[bench task c](bench/tasks/c-vitest-shared-state) run three times: once as-is,
+once after a "fix" to `src/format.ts` that changed nothing, and once more
+without edits. The third summary, unedited:
+
+```text
+✗ Command failed
+
+Incident: INC-20261005-001
+Type: PROCESS_FAILURE
+Exit code: 1
+Error: AssertionError: expected '3 items · $4,997' to be '3 items · $49.97' // Object.is equality
+At: test/pricing.test.ts:23
+Occurrences: 3 (first seen 21:51:15) — this failure happened before
+  #2 → #3: no file changes — re-run without edits
+  #1 → #2: changed src/format.ts — same failure
+Report: .dev-blackbox\reports\incidents\INC-20261005-001.md
+Details: npx dev-blackbox incident show INC-20261005-001 --format json
+```
+
+- **`Occurrences`** counts the same failure across runs and sessions: same
+  exception type, same normalized message, same top application frame. Line
+  numbers are ignored, so edits that shift lines don't hide a repeat.
+- **The indented lines** come from git: the files that changed between two
+  failing runs. "changed `src/format.ts` — same failure" tells the agent that
+  its last idea didn't work, before it tries a variation of it.
+- **`Earliest cause`** appears when the first exception in the output differs
+  from the one at the end, e.g. Spring's real `NumberFormatException` printed
+  once, followed by thousands of lines of "ApplicationContext failure
+  threshold exceeded". dev-blackbox follows every line of output, not just
+  the captured tail, and keeps the deepest cause of the first exception chain.
+
+`incident show <ID> --format json` returns the full record, including the
+attempt history and the cause excerpt, without re-running anything. Incidents
+persist in `.dev-blackbox/`, so the next session starts with them. Once the
+same command passes, the incident is marked as a resolve candidate.
+
+## FAQ
+
+### Why not just `| tail -50`?
+
+`tail` shows the last 50 lines of this run, and that's all. It can't tell the
+agent that this exact failure already came back twice, that the file it just
+edited made no difference, or what the first exception was 4,000 lines up.
+And it's gone when the session ends. dev-blackbox stores each failure (the
+last 1,000 lines, redacted and compressed) under a fingerprint, counts repeats
+across runs and sessions, and exposes them as JSON through `incident list` and
+`incident show`.
+
+The early-cause tracking covers exception chains (Java/Kotlin `Caused by:`,
+including Gradle's full exception format, JVM uncaught exceptions, JS/Python
+errors); [bench task b](bench/tasks/b-gradle-noisy-log) is built around that
+case. An early cause that is not an exception, such as a plain log line, still
+falls outside the captured tail.
+
+### Does it send data anywhere?
+
+No. Everything is written to `.dev-blackbox/` inside your project, which
+`init` adds to `.gitignore`. There is no telemetry and no account. The optional
+network collector binds to `127.0.0.1` only. Before anything is written to
+disk, secrets are masked: password, token, secret, and API-key fields,
+`Authorization` headers, cookies, bearer tokens, private key blocks, and any
+body keys you list in `.dev-blackbox/config.yml`.
+
+### Which agents?
+
+- **Claude Code**: rules in `CLAUDE.md`, plus an optional `PreToolUse` hook
+  (`init --hooks claude-code`) that rewrites build and test commands to go
+  through dev-blackbox. The rewritten command still goes through your normal
+  permission settings; the hook never approves anything by itself.
+- **Codex, Cursor, Windsurf, and others** that read `AGENTS.md`,
+  `.cursorrules`, or `.windsurfrules`: `init --agent-files` adds the same rules
+  to those files. There is no hook, so it relies on the agent following them.
+- **Any MCP client**: `npx dev-blackbox mcp` (see advanced usage).
+- **Anything that runs shell commands** can call the CLI directly.
+
+## Advanced
+
+Network capture, request replay, detached processes, the MCP server,
+retention, and the full CLI are documented in [docs/advanced.md](docs/advanced.md).
+
+## License
+
+MIT

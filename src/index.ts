@@ -1,9 +1,10 @@
 export { loadConfig, DEFAULT_CONFIG, type BlackboxConfig } from "./config.js";
-export { detectSoftSignals } from "./detection.js";
+export { bestSoftSignal, detectSoftSignals, RootCauseTracker, type RootCause } from "./detection.js";
 export {
   fingerprintFromError,
   fingerprintFromProcess,
   normalizeMessage,
+  normalizeRoutePath,
 } from "./fingerprint.js";
 export {
   markResolveCandidates,
@@ -12,7 +13,6 @@ export {
   setPinned,
   setStatus,
 } from "./incident.js";
-export { decideClaudeHook } from "./claude-hook.js";
 export { startCollector, type Collector } from "./collector-server.js";
 export {
   findContract,
@@ -23,6 +23,7 @@ export {
   type JsonSchema,
 } from "./contracts.js";
 export {
+  hookCommand,
   instructionBlock,
   runInit,
   setupClaudeCodeHook,
@@ -59,6 +60,12 @@ export { renderIncidentReport, writeIncidentReport } from "./report.js";
 export { autoPrune, prune, storageStatus } from "./retention.js";
 export { RingBuffer } from "./ring-buffer.js";
 export { runCommand } from "./runner.js";
+export { decideClaudeHook, wrapShellCommand } from "./claude-hook.js";
+export { publicIncident } from "./incident.js";
+export { cliCommand, detectInstall, type InstallKind } from "./invocation.js";
+export { formatFailureSummary, type SummaryInput } from "./summary.js";
+export { changedFiles, takeWorkspaceSnapshot, type WorkspaceSnapshot } from "./workspace.js";
 export { Redactor } from "./security.js";
 export { Storage, readJsonl } from "./storage.js";
+export { VERSION } from "./version.js";
 export * from "./types.js";
