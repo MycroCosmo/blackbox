@@ -2,7 +2,7 @@
 
 **Stop your AI coding agent from going in circles.**
 
-[한국어](README.ko.md) · [Benchmark](bench/README.md) · [Advanced usage](docs/advanced.md)
+[한국어](README.ko.md) · [Benchmark](bench/README.md) · [Advanced usage](docs/advanced.md) · [Local Spring request tracing](examples/spring-local/README.md)
 
 - Your agent "fixes" the same error again and again, because every failing run looks new to it.
 - It re-reads thousands of lines of build output to find the one line that matters.
@@ -72,8 +72,10 @@ Details: npx dev-blackbox incident show INC-20261005-001 --format json
   threshold exceeded". dev-blackbox follows every line of output, not just
   the captured tail, and keeps the deepest cause of the first exception chain.
 
-`incident show <ID> --format json` returns the full record, including the
-attempt history and the cause excerpt, without re-running anything. Incidents
+`incident show <ID> --format json` returns bounded details, recent attempts,
+and the captured cause without re-running anything. Use `--view raw` for logs;
+HTTP incidents also link to `network show <REQ-ID> --view raw --section stack`.
+Incidents
 persist in `.dev-blackbox/`, so the next session starts with them. Once the
 same command passes, the incident is marked as a resolve candidate.
 

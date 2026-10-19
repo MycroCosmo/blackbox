@@ -1,0 +1,106 @@
+{
+  "measuredAt": "2026-10-19T06:22:04.587Z",
+  "java": "openjdk version \"21.0.11\" 2026-04-21 LTS\r",
+  "node": "v22.17.0",
+  "springBoot": "3.5.3",
+  "fixture": "30 /ok, 4 /fail repeats, 8 concurrent /async, 1 alternate cause, 1 /large",
+  "records": 44,
+  "incidents": 4,
+  "sha256": "9e3c6803b6c84af371ef46120f408f3ea482aebb1ad5fd79cc9560e9c0785937",
+  "A_allCapturedRecords": {
+    "bytes": 293088,
+    "characters": 293088
+  },
+  "B_listAndSelectedDetail": {
+    "bytes": 3684,
+    "characters": 3684
+  },
+  "B_twoRpcRequestsAndResponses": {
+    "bytes": 4504,
+    "characters": 4504
+  },
+  "optionalRawCall": {
+    "bytes": 584,
+    "characters": 584
+  },
+  "repeatedDetailCall": {
+    "bytes": 1395,
+    "characters": 1395
+  },
+  "tokenizer": null,
+  "tokenCount": null,
+  "measurement": "UTF-8 bytes and Unicode code points, not tokens or whole-conversation cost",
+  "querySequence": [
+    {
+      "name": "list_incidents",
+      "arguments": {}
+    },
+    {
+      "name": "get_incident",
+      "arguments": {
+        "incidentId": "INC-20261019-001"
+      }
+    },
+    {
+      "name": "get_network_request",
+      "arguments": {
+        "requestId": "REQ-20261019-034",
+        "view": "raw",
+        "section": "logs"
+      }
+    }
+  ],
+  "diagnosticEvidence": {
+    "requestId": "REQ-20261019-034",
+    "rootCause": {
+      "type": "java.lang.IllegalArgumentException",
+      "message": "inventory unavailable",
+      "frames": [
+        "at dev.blackbox.DemoApplication.fail(DemoApplication.java:32)",
+        "at dev.blackbox.BlackboxAdapter.doFilterInternal(BlackboxAdapter.java:125)"
+      ]
+    },
+    "repeatedOccurrences": 4,
+    "relatedLog": "2026-10-19T06:22:03.508Z INFO dev.blackbox.DemoApplication marker=repeat-3 password=[REDACTED] cookie=[REDACTED]"
+  },
+  "adapter": {
+    "lastSentAt": "2026-10-19T06:22:03.895400700Z",
+    "sent": 44,
+    "queued": 0,
+    "active": 0,
+    "dropped": 0,
+    "sendFailures": 0
+  },
+  "checks": [
+    "normal",
+    "exception/cause",
+    "repeat grouping",
+    "different cause separation",
+    "concurrent async isolation",
+    "long stack/log limits",
+    "redaction",
+    "CLI chain",
+    "MCP stdio chain",
+    "prefixed colon secrets masked in storage/CLI/MCP",
+    "logged Throwable cause and frames",
+    "early ERROR and late diagnostic survive overflow",
+    "collector offline does not change application responses",
+    "bounded queue overflow visible; 100 burst requests still succeed"
+  ],
+  "offlineAdapter": {
+    "lastSentAt": "2026-10-19T06:22:04.755131300Z",
+    "sent": 47,
+    "queued": 0,
+    "active": 0,
+    "dropped": 0,
+    "sendFailures": 2
+  },
+  "overloadAdapter": {
+    "lastSentAt": "2026-10-19T06:22:04.755131300Z",
+    "sent": 47,
+    "queued": 64,
+    "active": 1,
+    "dropped": 35,
+    "sendFailures": 2
+  }
+}

@@ -1,0 +1,88 @@
+{
+  "measuredAt": "2026-10-19T06:22:04.587Z",
+  "tiktoken": "0.14.0",
+  "records": 44,
+  "scope": "Literal input text tokens, not full conversation cost or model billing. A is reconstructed captured logs with common Java frames collapsed; B investigates one incident.",
+  "querySequence": [
+    {
+      "name": "list_incidents",
+      "arguments": {}
+    },
+    {
+      "name": "get_incident",
+      "arguments": {
+        "incidentId": "INC-20261019-001"
+      }
+    },
+    {
+      "name": "get_network_request",
+      "arguments": {
+        "requestId": "REQ-20261019-034",
+        "view": "raw",
+        "section": "logs"
+      }
+    }
+  ],
+  "metrics": {
+    "A_logText": {
+      "bytes": 154991,
+      "characters": 154991,
+      "sha256": "9af8f29b50b2471af1191b7abd0851479bfa0d274e0d40d225f6da7928c96118",
+      "o200k_base": 36504,
+      "cl100k_base": 37001
+    },
+    "A_storedJSON": {
+      "bytes": 293088,
+      "characters": 293088,
+      "sha256": "9e3c6803b6c84af371ef46120f408f3ea482aebb1ad5fd79cc9560e9c0785937",
+      "o200k_base": 66599,
+      "cl100k_base": 67649
+    },
+    "B_listAndDetail": {
+      "bytes": 3684,
+      "characters": 3684,
+      "sha256": "bd53a5dce0bc36f1af8c4c177a7a21736fc1830011d8ac6a864cb4d15c40ee3e",
+      "o200k_base": 1236,
+      "cl100k_base": 1232
+    },
+    "toolSchemasCompact": {
+      "bytes": 6166,
+      "characters": 6166,
+      "sha256": "0ff95a9839b91107b74b085a3646c5a746bbad3d9d34f42a8d48199605d783d6",
+      "o200k_base": 1407,
+      "cl100k_base": 1355
+    },
+    "toolSchemasPretty": {
+      "bytes": 10048,
+      "characters": 10048,
+      "sha256": "4721ec9b4ae9cb40fbb31c89c5a40bcfc96507d5eedf0a5862a4dcb25324cb65",
+      "o200k_base": 2362,
+      "cl100k_base": 2361
+    },
+    "callArguments": {
+      "bytes": 110,
+      "characters": 110,
+      "sha256": "176f63821f18e2eeb2ed982e0e116c203ebb0bb88a11934a650835dee733f700",
+      "o200k_base": 31,
+      "cl100k_base": 31
+    },
+    "optionalRaw": {
+      "bytes": 271,
+      "characters": 271,
+      "sha256": "332fda5ba44fac8a8cfdf3b74392b454c54842672cf8dd781548b4a8b838d8ae",
+      "o200k_base": 101,
+      "cl100k_base": 101
+    },
+    "repeatedDetail": {
+      "bytes": 1395,
+      "characters": 1395,
+      "sha256": "a7fab935452edebc42341a0aba7b4c64ecc89fd42ef9ead6360f0a9762dab985",
+      "o200k_base": 466,
+      "cl100k_base": 465
+    }
+  },
+  "contentSavingsPercent": {
+    "o200k_base": 96.61,
+    "cl100k_base": 96.67
+  }
+}

@@ -57,6 +57,8 @@ export function startCollector(opts: {
   const redactor = new Redactor(config.security.redactBodyKeys);
   const sessionId = `SESSION-${storage.newSessionId()}`;
   let seq = storage.nextRequestSeq();
+  const status = { accepted: 0, rejected: 0, sampledOut: 0, incidentLinkFailures: 0, storageFull: false, lastEventAt: null as string | null };
+  let closing: Promise<void> | undefined;
   const contracts = loadContracts(storage);
   try {
     autoPrune(storage, config);
@@ -106,7 +108,7 @@ export function startCollector(opts: {
     };
 
     if (req.method === "GET" && req.url === "/health") {
-      send(200, { ok: true, sessionId });
+      send(200, { ok: true, sessionId, ...status });
       return;
     }
     if (req.method === "OPTIONS" && req.url === "/events/network") {
@@ -150,6 +152,7 @@ export function startCollector(opts: {
       if (rejected) return;
       size += chunk.length;
       if (size > MAX_EVENT_BYTES) {
+        status.rejected++;
         rejected = true;
         send(413, { ok: false, error: "event too large" });
         req.destroy();
@@ -163,6 +166,7 @@ export function startCollector(opts: {
       try {
         parsed = JSON.parse(Buffer.concat(chunks).toString("utf8"));
       } catch {
+        status.rejected++;
         send(400, { ok: false, error: "invalid JSON" });
         return;
       }
@@ -170,7 +174,17 @@ export function startCollector(opts: {
         const requestId = `${seq.prefix}${String(seq.next).padStart(3, "0")}`;
         const record = buildNetworkRecord(parsed, { requestId, sessionId }, config, redactor, contracts);
         if (!shouldStore(record.url, record.classification, config)) {
+          status.sampledOut++;
           send(202, { ok: true, stored: false, reason: "sampled_out" });
+          return;
+        }
+        // Protected incidents are never deleted to make room. Stop accepting before
+        // the cap, reserving room for the incident and disposable report views.
+        const requiredBytes = Buffer.byteLength(JSON.stringify(record)) * 4 + 16384;
+        status.storageFull = storage.totalSizeBytes() + requiredBytes > config.storage.maxTotalSizeMB * 1024 * 1024;
+        if (status.storageFull) {
+          status.rejected++;
+          send(507, { ok: false, error: "storage limit reached; prune or increase storage.maxTotalSizeMB" });
           return;
         }
         // Phase 3: failing traffic is linked to a (merged) incident.
@@ -178,10 +192,13 @@ export function startCollector(opts: {
           try {
             record.incidentId = recordNetworkFailure(storage, record).incidentId;
           } catch {
+            status.incidentLinkFailures++;
             /* incident linking must not lose the network record */
           }
         }
         storage.appendNetwork(record);
+        status.accepted++;
+        status.lastEventAt = record.receivedAt;
         try {
           if (isFailure(record.classification)) {
             storage.writeNetworkEventReport(
@@ -206,6 +223,7 @@ export function startCollector(opts: {
           incidentId: record.incidentId,
         });
       } catch (e) {
+        status.rejected++;
         send(400, { ok: false, error: e instanceof Error ? e.message : String(e) });
       }
     });
@@ -224,18 +242,18 @@ export function startCollector(opts: {
     server.listen(opts.port ?? config.collector.port, "127.0.0.1", () => {
       const address = server.address();
       const port = typeof address === "object" && address ? address.port : config.collector.port;
-      storage.writeCollectorLock({
-        pid: process.pid,
-        port,
-        sessionId,
-        startedAt: new Date().toISOString(),
-      });
+      try {
+        storage.writeCollectorLock({ pid: process.pid, port, sessionId, startedAt: new Date().toISOString() });
+      } catch (error) {
+        clearInterval(pruneTimer);
+        server.close(() => reject(error));
+        return;
+      }
       resolve({
         port,
         sessionId,
         flushReports: flushNetworkSummary,
-        close: () =>
-          new Promise<void>((res) => {
+        close: () => closing ??= new Promise<void>((res) => {
             clearInterval(pruneTimer);
             if (networkReportTimer) clearTimeout(networkReportTimer);
             networkReportTimer = undefined;
@@ -249,6 +267,7 @@ export function startCollector(opts: {
               }
               res();
             });
+            server.closeAllConnections();
           }),
       });
     });

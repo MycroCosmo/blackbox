@@ -182,12 +182,13 @@ function pruneUnlocked(
     for (let i = 0; i < keptEvents.length; i++) {
       const e = keptEvents[i]!;
       const failure = isFailure(e.classification);
-      const hasBody = e.requestBody !== undefined || e.responseBody !== undefined;
+      const hasBody = e.requestBody !== undefined || e.responseBody !== undefined || e.profile !== undefined;
       const sessionEnded = e.sessionId !== activeSession;
       const strip = hasBody &&
         ((!failure && sessionEnded) || (failure && Date.parse(e.receivedAt) < failedBodyCutoff));
       if (strip) {
-        keptEvents[i] = { ...e, requestBody: undefined, responseBody: undefined };
+        keptEvents[i] = { ...e, requestBody: undefined, responseBody: undefined,
+          profile: undefined, profileExpired: e.profileExpired || e.profile !== undefined };
         result.strippedNetworkBodies++;
         changed = true;
       }

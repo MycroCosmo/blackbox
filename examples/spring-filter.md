@@ -1,49 +1,11 @@
-# Spring Boot OncePerRequestFilter
+# Spring integration
 
-Register only in the `local`/`dev` profile.
+Use the runnable [spring-local example](spring-local/README.md). Its optional
+[BlackboxAdapter.java](spring-local/src/main/java/dev/blackbox/BlackboxAdapter.java)
+replaces the earlier synchronous HTTP snippet: a bounded background queue sends
+completed requests, exceptions, causes and request-local Logback messages.
 
-```java
-@Component
-@Profile("local")
-public class DevBlackboxFilter extends OncePerRequestFilter {
-
-    private static final String COLLECTOR = "http://127.0.0.1:4319/events/network";
-    private final RestClient client = RestClient.create();
-    private final ObjectMapper om = new ObjectMapper();
-
-    @Override
-    protected void doFilterInternal(HttpServletRequest req, HttpServletResponse res, FilterChain chain)
-            throws ServletException, IOException {
-        ContentCachingRequestWrapper request = new ContentCachingRequestWrapper(req);
-        ContentCachingResponseWrapper response = new ContentCachingResponseWrapper(res);
-        long started = System.currentTimeMillis();
-        try {
-            chain.doFilter(request, response);
-        } finally {
-            report(request, response, System.currentTimeMillis() - started);
-            response.copyBodyToResponse();
-        }
-    }
-
-    private void report(ContentCachingRequestWrapper req, ContentCachingResponseWrapper res, long durationMs) {
-        try { // reporting must never break the request
-            Map<String, Object> event = Map.of(
-                "traceId", Optional.ofNullable(req.getHeader("X-Dev-Blackbox-Trace-Id")).orElse(""),
-                "source", Map.of("application", "backend"),
-                "request", Map.of(
-                    "method", req.getMethod(),
-                    "url", req.getRequestURI(),
-                    "body", parse(req.getContentAsByteArray())),
-                "response", Map.of(
-                    "status", res.getStatus(),
-                    "body", parse(res.getContentAsByteArray())),
-                "durationMs", durationMs);
-            client.post().uri(COLLECTOR).contentType(MediaType.APPLICATION_JSON).body(event).retrieve().toBodilessEntity();
-        } catch (Exception ignored) { }
-    }
-
-    private Object parse(byte[] body) {
-        try { return om.readTree(body); } catch (Exception e) { return null; }
-    }
-}
-```
+Copy the adapter into an existing Spring Boot 3 Servlet application with the web
+starter (Jackson + Logback), under its component scan. Enable only the `local`
+profile. There is no Java agent or Scouter installation. See the example for the
+explicit async propagation contract and collection limits.

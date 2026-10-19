@@ -6,3 +6,4 @@ smoke-project/
 demo-project/
 .agents/
 *.log
+examples/spring-local/target/

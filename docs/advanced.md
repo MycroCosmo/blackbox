@@ -196,14 +196,25 @@ successful response bodies are stripped promptly. Defaults are:
 - repeated incidents: one latest compressed log blob per fingerprint;
 - successful command sessions: 3 days;
 - successful network metadata: 3 days;
-- successful network bodies: stripped when the collector session ends;
-- failed network bodies: stripped after 30 days;
+- successful network bodies and request profiles: stripped when the collector session ends;
+- failed network bodies and request profiles: stripped after 30 days;
 - resolved, unpinned incidents and linked reports: 90 days;
 - open or pinned incidents: never automatically deleted.
 
 The 500 MB default size cap is enforced by removing disposable command
 sessions, successful network events, and resolved unpinned incidents in that
 order. Protected open or pinned data may intentionally exceed the cap.
+The collector now refuses new events with HTTP 507 when the remaining budget
+cannot fit the event and report allowance. `doctor` and `/health` report this.
+Concurrent command writers still follow the existing protected-data policy.
+
+Request tracing adds bounded list/detail/raw queries to the existing CLI/MCP
+tools, with service/time/request/error filters and page/poll cursors. See the
+[runnable Spring example](../examples/spring-local/README.md) and
+[design, Scouter sources and limits](request-tracing.md). `network show` no
+longer expands a complete trace by default: use `network list --trace <id>`.
+`--view raw --section logs|stack|event` retrieves masked originals, optionally
+with `--start-line` and `--line-count`. Follow `nextCursor` for additional pages.
 
 Manual inspection and cleanup remain available:
 

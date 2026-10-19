@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 /** How dev-blackbox is installed for a project, and therefore which command
  *  the agent (and the Claude Code hook) should use to invoke it.
@@ -10,8 +10,9 @@ import { fileURLToPath } from "node:url";
  *  - "global": `npm i -g dev-blackbox`, the path for non-Node projects
  *              (Gradle, Maven, Go, Python …) that have no package.json.
  *  - "npx":    run from the npx cache (`npx dev-blackbox init` without an
- *              install); keep using npx. */
-export type InstallKind = "local" | "global" | "npx";
+ *              install); keep using npx.
+ *  - "source": invoke the running checkout directly; no global install needed. */
+export type InstallKind = "local" | "global" | "npx" | "source";
 
 /** dist/cli.js (or src/cli.ts under tsx) of the running copy. */
 export function runningCliPath(): string {
@@ -34,13 +35,18 @@ export function detectInstall(projectDir: string, cliPath = runningCliPath()): I
   if (localInstallDir(projectDir)) return "local";
   const normalized = cliPath.split(path.sep).join("/");
   if (normalized.includes("/_npx/")) return "npx";
-  // A development checkout (tsx src/cli.ts, or a linked dist/) behaves like a
-  // global install unless the project depends on it locally.
-  if (!normalized.includes("/node_modules/") || !isInside(cliPath, projectDir)) return "global";
+  if (!normalized.includes("/node_modules/")) return "source";
+  if (!isInside(cliPath, projectDir)) return "global";
   return "local";
 }
 
 /** Command prefix to print in agent rules and summaries. */
-export function cliCommand(kind: InstallKind): string {
+export function cliCommand(kind: InstallKind, cliPath = runningCliPath()): string {
+  if (kind === "source") {
+    // Single quotes work in PowerShell and Bash; never interpolate shell metacharacters.
+    const quote = (value: string) => "'" + value.replaceAll("'", process.platform === "win32" ? "''" : "'\"'\"'") + "'";
+    const loader = pathToFileURL(path.resolve(path.dirname(cliPath), "../node_modules/tsx/dist/loader.mjs")).href;
+    return `node ${cliPath.endsWith(".ts") ? `--import ${quote(loader)} ` : ""}${quote(cliPath)}`;
+  }
   return kind === "global" ? "dev-blackbox" : "npx dev-blackbox";
 }

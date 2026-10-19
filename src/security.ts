@@ -15,7 +15,7 @@ const COMMON_SECRET_KEY_RE =
 // x-api-key, private_key and DB_PASSWORD consistent across objects and text.
 const DOUBLE_QUOTED_PAIR_RE = /("([^"\\\r\n]+)"\s*:\s*)("(?:\\.|[^"\\])*")/g;
 const SINGLE_QUOTED_PAIR_RE = /('([^'\\\r\n]+)'\s*:\s*)('(?:\\.|[^'\\])*')/g;
-const HEADER_PAIR_RE = /^(\s*)([A-Za-z0-9_.\-/]+)(\s*:\s*)(\S.*)$/gm;
+const HEADER_KEY_RE = /(^|[^A-Za-z0-9_.\-/])([A-Za-z0-9_.\-/]+)([ \t]*:[ \t]*)/g;
 const ASSIGNMENT_PAIR_RE =
   /(^|[^A-Za-z0-9_.\-/])([A-Za-z0-9_.\-/]+)(\s*=\s*)("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s&;]+)/gm;
 
@@ -55,11 +55,14 @@ export class Redactor {
       (match, prefix: string, key: string) =>
         this.isSensitiveKey(key) ? `${prefix}'${REDACTED}'` : match,
     );
-    out = out.replace(
-      HEADER_PAIR_RE,
-      (match, leading: string, key: string, separator: string) =>
-        this.isSensitiveKey(key) ? `${leading}${key}${separator}${REDACTED}` : match,
-    );
+    out = out.replace(/[^\r\n]+/g, line => {
+      for (const match of line.matchAll(HEADER_KEY_RE)) {
+        // Header values (Basic auth, cookies, passwords) may contain spaces.
+        // Mask the rest of that line even after a timestamp/logger prefix.
+        if (this.isSensitiveKey(match[2]!)) return line.slice(0, match.index! + match[0].length) + REDACTED;
+      }
+      return line;
+    });
     out = out.replace(
       ASSIGNMENT_PAIR_RE,
       (match, leading: string, key: string, separator: string) =>

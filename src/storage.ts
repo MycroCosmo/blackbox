@@ -182,12 +182,16 @@ export class Storage {
     const ymd = now.toISOString().slice(0, 10).replace(/-/g, "");
     const prefix = `INC-${ymd}-`;
     let max = 0;
+    const watermark = path.join(this.root, `.incident-id-${ymd}`);
+    try { max = Number(fs.readFileSync(watermark, "utf8")) || 0; } catch { /* first allocation */ }
     for (const inc of this.readIncidents()) {
       if (inc.incidentId.startsWith(prefix)) {
         const n = Number(inc.incidentId.slice(prefix.length));
         if (Number.isFinite(n) && n > max) max = n;
       }
     }
+    this.ensureDirs();
+    fs.writeFileSync(watermark, String(max + 1), "utf8");
     return `${prefix}${String(max + 1).padStart(3, "0")}`;
   }
 
@@ -195,6 +199,8 @@ export class Storage {
    *  runs — the 127.0.0.1 port bind acts as the writer lock (spec 6.1). */
   appendNetwork(record: NetworkRecord): void {
     this.ensureDirs();
+    // Keep the high-water ID across retention and restarts; IDs must never be reused.
+    fs.writeFileSync(path.join(this.root, ".request-id"), record.requestId, "utf8");
     fs.appendFileSync(this.networkFile, JSON.stringify(record) + "\n", "utf8");
   }
 
@@ -215,6 +221,10 @@ export class Storage {
     const ymd = now.toISOString().slice(0, 10).replace(/-/g, "");
     const prefix = `REQ-${ymd}-`;
     let max = 0;
+    try {
+      const id = fs.readFileSync(path.join(this.root, ".request-id"), "utf8");
+      if (id.startsWith(prefix)) max = Number(id.slice(prefix.length)) || 0;
+    } catch { /* first collection */ }
     for (const r of this.readNetwork()) {
       if (r.requestId.startsWith(prefix)) {
         const n = Number(r.requestId.slice(prefix.length));

@@ -10,6 +10,7 @@ import type {
   SoftSignal,
 } from "./types.js";
 import { changedFiles, type WorkspaceSnapshot } from "./workspace.js";
+import { applicationFrames } from "./request-profile.js";
 
 /** Incident creation and fingerprint-based merging (spec 4.4).
  *  A recurring fingerprint updates the existing incident (occurrence count,
@@ -186,12 +187,20 @@ function recordNetworkFailureLocked(storage: Storage, record: NetworkRecord): In
       return record.url;
     }
   })();
-  const fingerprint = ["NETWORK", record.classification, record.method, normalizeRoutePath(pathOnly)].join("|");
-  const errorType =
+  const exception = record.profile?.exception;
+  const cause = exception?.causes.at(-1) ?? exception;
+  const frame = cause ? applicationFrames(cause.stack)[0]?.replace(/:\d+\)/g, ")") : undefined;
+  const stableMessage = cause?.message
+    .replace(/\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})\b/g, "<timestamp>")
+    .replace(/\b(?:request[-_]?id|trace[-_]?id)\s*[=:]\s*[^\s,;]+/gi, "requestId=<id>");
+  const fingerprint = ["NETWORK", record.classification, record.method, normalizeRoutePath(pathOnly),
+    record.source?.application ?? "", record.status ?? "",
+    ...(cause ? [exception!.type, fingerprintFromError(cause.type, stableMessage!), frame ?? ""] : [])].join("|");
+  const errorType = exception?.type ?? (
     record.classification === "http_error" && record.status != null
       ? `HTTP_${record.status}`
-      : record.classification.toUpperCase();
-  const message = `${record.method} ${record.url} -> ${record.status ?? record.classification}`;
+      : record.classification.toUpperCase());
+  const message = exception?.message ?? `${record.method} ${record.url} -> ${record.status ?? record.classification}`;
   const facts = [
     `${record.method} ${record.url} classified as ${record.classification}` +
       (record.status != null ? ` (status ${record.status})` : ""),

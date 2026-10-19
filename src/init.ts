@@ -24,7 +24,8 @@ export function instructionBlock(cli = "npx dev-blackbox"): string {
     "- On failure, read the summary first. `Error`/`At`: where it failed. `Earliest cause`: the deepest cause of the first exception printed, usually the real cause.",
     "- `Occurrences: N` (N > 1) means your previous fix did not work; the indented lines list files you changed between failing runs. Do not repeat that approach.",
     `- Use \`${cli} incident show <ID> --format json\`, \`incident list\`, or \`network list --failed\` only when the summary is not enough or the task refers to earlier failures.`,
-    "- A success after a fix closes the incident automatically; it reopens if the failure returns.",
+    "- For recent HTTP errors: list_incidents → get_incident → get_network_request(view=raw, section=logs/stack) only if needed. CLI: incident list → incident show → network show --view raw. Filter by service/time/trace, drain nextCursor pages, then use pollCursor as after for new requests. Run doctor if nothing arrives.",
+    "- A success after a fix marks the incident as a resolve candidate; it reopens if the failure returns.",
     "- With `init --auto`, plain `npm run dev` records too. Never replay non-idempotent requests without explicit user confirmation.",
     BLOCK_END,
   ].join("\n");
@@ -206,6 +207,7 @@ export function wrapPackageScript(projectDir: string, script = "dev"): ScriptWra
  *  the package is installed: call the local file directly (Claude Code
  *  substitutes ${CLAUDE_PROJECT_DIR}), or the global binary. */
 export function hookCommand(install: InstallKind): string {
+  if (install === "source") return `${cliCommand(install)} claude-hook`;
   if (install === "local")
     return 'node "${CLAUDE_PROJECT_DIR}/node_modules/dev-blackbox/dist/cli.js" claude-hook';
   if (install === "global") return "dev-blackbox claude-hook";
@@ -214,7 +216,7 @@ export function hookCommand(install: InstallKind): string {
 
 /** Matches any command this package ever registered, across versions. */
 function isOurHook(command: unknown): boolean {
-  return typeof command === "string" && /dev-blackbox\b.*\bclaude-hook\b/.test(command);
+  return typeof command === "string" && (/dev-blackbox\b.*\bclaude-hook\b/.test(command) || command === hookCommand("source"));
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {

@@ -5,6 +5,14 @@ import { Redactor } from "../src/security.js";
 const redactor = new Redactor(DEFAULT_CONFIG.security.redactBodyKeys);
 
 describe("Redactor.redactLine", () => {
+  it("masks colon secrets after logger prefixes and other colon fields", () => {
+    const prefix = "2026-10-19T03:31:36Z INFO app.Controller context: failed ";
+    for (const value of ["password: private words", "Authorization: Basic ZmFrZTpzZWNyZXQ=", "api_key: fake-key", "Cookie: session=fake; other=value"]) {
+      const masked = redactor.redactLine(prefix + value);
+      expect(masked).toBe(prefix + value.slice(0, value.indexOf(":") + 2) + "[REDACTED]");
+    }
+    expect(redactor.redactLine(prefix + "duration: 12ms")).toBe(prefix + "duration: 12ms");
+  });
   it("masks JSON-style secret values", () => {
     const line = '{"email": "ian@example.com", "password": "hunter2", "accessToken": "abc123"}';
     const out = redactor.redactLine(line);

@@ -2,6 +2,7 @@ import { Buffer } from "node:buffer";
 import type { BlackboxConfig } from "./config.js";
 import { findContract, validateAgainstSchema, type Contract, type ContractMismatch } from "./contracts.js";
 import type { Redactor } from "./security.js";
+import { buildProfile, type RequestProfile } from "./request-profile.js";
 
 /** Network event model, classification and payload policies (spec 5, 7.3, 7.4). */
 
@@ -29,6 +30,7 @@ const CLIENT_ERROR_TYPES: NetworkClassification[] = [
 /** Shape accepted on POST /events/network. Everything except request.method
  *  and request.url is optional so any language can report with plain HTTP. */
 export interface NetworkEventInput {
+  profile?: RequestProfile;
   timestamp?: string;
   traceId?: string;
   source?: { application?: string; page?: string; action?: string };
@@ -56,6 +58,8 @@ export interface BodyMeta {
 }
 
 export interface NetworkRecord {
+  profile?: RequestProfile;
+  profileExpired?: boolean;
   schemaVersion: number;
   requestId: string;
   sessionId: string;
@@ -95,7 +99,7 @@ export function classify(
   if (claimed && CLIENT_ERROR_TYPES.includes(claimed)) return claimed;
 
   const status = input.response?.status;
-  if (input.error) return "network_error";
+  if (input.error || input.profile?.exception) return status != null && status >= 400 ? "http_error" : "network_error";
   if (status == null) return "network_error";
   if (status >= 400) return "http_error";
   // Only flag empty_response when the reporter explicitly included an empty body.
@@ -239,6 +243,12 @@ export function buildNetworkRecord(
   if (!ev.request || typeof ev.request.method !== "string" || typeof ev.request.url !== "string") {
     throw new Error("request.method and request.url are required");
   }
+  if (ev.request.method.length > 32 || ev.request.url.length > 8192) throw new Error("request method/url too long");
+  if (ev.traceId !== undefined && (typeof ev.traceId !== "string" || ev.traceId.length > 256)) throw new Error("invalid traceId");
+  if (ev.source?.application !== undefined && (typeof ev.source.application !== "string" || ev.source.application.length > 256)) throw new Error("invalid source.application");
+  if (ev.timestamp !== undefined && (typeof ev.timestamp !== "string" || !Number.isFinite(Date.parse(ev.timestamp)))) throw new Error("invalid timestamp");
+  if (ev.durationMs !== undefined && (typeof ev.durationMs !== "number" || !Number.isFinite(ev.durationMs) || ev.durationMs < 0)) throw new Error("invalid durationMs");
+  if (ev.response?.status !== undefined && (!Number.isInteger(ev.response.status) || ev.response.status < 100 || ev.response.status > 599)) throw new Error("invalid response.status");
   // Contract validation runs on the raw body before redaction/truncation so
   // types and required keys remain intact.
   const evaluation = evaluateNetworkEvent(ev, config, contracts);
@@ -258,6 +268,7 @@ export function buildNetworkRecord(
   );
   return {
     schemaVersion: 1,
+    profile: buildProfile(ev.profile, redactor),
     requestId: ids.requestId,
     sessionId: ids.sessionId,
     receivedAt: now.toISOString(),

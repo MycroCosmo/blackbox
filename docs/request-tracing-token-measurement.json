@@ -1,0 +1,122 @@
+{
+  "tiktoken": "0.14.0",
+  "encodings": [
+    "o200k_base",
+    "cl100k_base"
+  ],
+  "scope": "literal input text tokens, not a model bill or end-to-end conversation measurement",
+  "notes": [
+    "44 actual Spring requests; same stored dataset for A/B",
+    "Java common stack suffixes collapsed for fairer text-only baseline",
+    "human excerpt uses prior knowledge/selection; manual effort not measured",
+    "tool schema literal JSON counted separately; client framing/caching unspecified",
+    "tiny failure is one directly POSTed language-neutral fixture, not a JVM response"
+  ],
+  "metrics": {
+    "all44_fullStoredJSON": {
+      "bytes": 293088,
+      "characters": 293088,
+      "sha256": "613d6a63cad73233517867c01914ddd483c9a67cd407f2a8f949c724a6ef7d93",
+      "o200k_base": 66301,
+      "cl100k_base": 67354
+    },
+    "all44_logTextCommonFramesCollapsed": {
+      "bytes": 154971,
+      "characters": 154971,
+      "sha256": "55ebbea815acab36bf617c3dfdcd78a1b723b2e1f61f00a12008c241cf3c5f4d",
+      "o200k_base": 36280,
+      "cl100k_base": 36777
+    },
+    "all44_B_listAndDetail": {
+      "bytes": 3684,
+      "characters": 3684,
+      "sha256": "8099904c38ae3a8b6b369d60ec7b21b3bd2d652312018d28b8e4dd70c3201d9e",
+      "o200k_base": 1232,
+      "cl100k_base": 1225
+    },
+    "oneSpringFailure_fullStoredJSON": {
+      "bytes": 12508,
+      "characters": 12508,
+      "sha256": "aa7d41c6f39940f2eaae1d4975bee0f3006e4c4ab31edaa91775aa8a24ad1424",
+      "o200k_base": 2533,
+      "cl100k_base": 2578
+    },
+    "oneSpringFailure_logText": {
+      "bytes": 5239,
+      "characters": 5239,
+      "sha256": "455cb76e238cdb8f65a5807ba2c3fd17012c3aae0e653f46ad6e757bb3582818",
+      "o200k_base": 1091,
+      "cl100k_base": 1112
+    },
+    "oneSpringFailure_B_listAndDetail": {
+      "bytes": 2144,
+      "characters": 2144,
+      "sha256": "a31ea20059c479bffbba85cb73dd85526420f3dd76e9a1a55c895cc9baf7ad22",
+      "o200k_base": 741,
+      "cl100k_base": 741
+    },
+    "tinyFailure_fullStoredJSON": {
+      "bytes": 750,
+      "characters": 750,
+      "sha256": "3aa134d530d78d50728812b07512ddff0a5d04f7ec2afd870605ddd45b521531",
+      "o200k_base": 235,
+      "cl100k_base": 234
+    },
+    "tinyFailure_logText": {
+      "bytes": 159,
+      "characters": 159,
+      "sha256": "0816fd233c6d99fa5af14ada3152159c602b9bc45d82c74248fe650b85c0f169",
+      "o200k_base": 51,
+      "cl100k_base": 50
+    },
+    "tinyFailure_B_listAndDetail": {
+      "bytes": 1781,
+      "characters": 1781,
+      "sha256": "9f3bddc7a47f1a723fd187ba797bf397286b49384c2d38e91060a900541d0083",
+      "o200k_base": 627,
+      "cl100k_base": 625
+    },
+    "selectedRequest_logText": {
+      "bytes": 5234,
+      "characters": 5234,
+      "sha256": "8e82f01cc0e3db24db247d8b6476bf0c1b9fa51825349fc5dcae8ff677d34534",
+      "o200k_base": 1092,
+      "cl100k_base": 1113
+    },
+    "humanSelectedDiagnosticExcerpt": {
+      "bytes": 329,
+      "characters": 329,
+      "sha256": "b78d90deb874ad17485d5bff0fb4d569bbfe8edbc5a7090b9c84136231338ff6",
+      "o200k_base": 106,
+      "cl100k_base": 104
+    },
+    "allMcpToolSchemas_literalJSON": {
+      "bytes": 10048,
+      "characters": 10048,
+      "sha256": "4721ec9b4ae9cb40fbb31c89c5a40bcfc96507d5eedf0a5862a4dcb25324cb65",
+      "o200k_base": 2362,
+      "cl100k_base": 2361
+    },
+    "all44_B_callArguments": {
+      "bytes": 134,
+      "characters": 134,
+      "sha256": "b460cec8cd3c2ffb396bb67589720fe06cd30d7e6943fcf6a752291b39efca61",
+      "o200k_base": 35,
+      "cl100k_base": 34
+    },
+    "optionalRawToolContent": {
+      "bytes": 271,
+      "characters": 271,
+      "sha256": "8cc5a0a30246e4277067578a13aba5066f4d7bf88728002aa2335ab76e40dca0",
+      "o200k_base": 101,
+      "cl100k_base": 101
+    },
+    "repeatedDetailToolContent": {
+      "bytes": 1395,
+      "characters": 1395,
+      "sha256": "aacb28b745e28a240c60848fa75a459f5d0a92530394cb98ab56071cec09b6cf",
+      "o200k_base": 464,
+      "cl100k_base": 463
+    }
+  }
+}

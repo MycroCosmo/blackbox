@@ -2,7 +2,7 @@
 
 **AI 코딩 에이전트가 같은 자리를 맴돌지 않게.**
 
-[English](README.md) · [벤치마크](bench/README.md) · [고급 사용법 (영문)](docs/advanced.md)
+[English](README.md) · [벤치마크](bench/README.md) · [고급 사용법 (영문)](docs/advanced.md) · [로컬 Spring 요청 추적](examples/spring-local/README.md)
 
 - 에이전트는 실패할 때마다 처음 보는 에러처럼 여기고 같은 에러를 몇 번이고 다시 고칩니다.
 - 중요한 한 줄을 찾으려고 수천 줄짜리 빌드 로그를 매번 다시 읽습니다.
@@ -71,8 +71,9 @@ Details: npx dev-blackbox incident show INC-20261005-001 --format json
   dev-blackbox는 마지막 부분만이 아니라 출력 전체를 따라가며 첫 예외 체인의 가장 깊은
   원인을 보관합니다.
 
-`incident show <ID> --format json`은 다시 실행하지 않고 시도 내역과 원인 발췌를 포함한
-전체 기록을 돌려줍니다. 인시던트는 `.dev-blackbox/`에 남기 때문에 다음 세션도 이 기록에서
+`incident show <ID> --format json`은 다시 실행하지 않고 최근 시도와 원인을 크기가 제한된
+상세로 돌려줍니다. 로그는 `--view raw`, HTTP 스택은 `network show <REQ-ID> --view raw --section stack`으로 조회합니다.
+인시던트는 `.dev-blackbox/`에 남기 때문에 다음 세션도 이 기록에서
 시작합니다. 같은 명령이 성공하면 해당 인시던트는 해결 후보로 표시됩니다.
 
 ## FAQ

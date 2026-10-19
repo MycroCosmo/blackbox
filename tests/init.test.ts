@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { BLOCK_END, BLOCK_START, runInit, upsertBlock } from "../src/init.js";
+import { cliCommand, detectInstall } from "../src/invocation.js";
 
 let dir: string;
 
@@ -24,7 +25,7 @@ describe("runInit", () => {
     expect(fs.readFileSync(path.join(dir, ".gitignore"), "utf8")).toContain(".dev-blackbox/");
     const claude = fs.readFileSync(path.join(dir, "CLAUDE.md"), "utf8");
     expect(claude).toContain(BLOCK_START);
-    expect(claude).toMatch(/`(?:npx )?dev-blackbox run -- <command>`/);
+    expect(claude).toContain(`${cliCommand(detectInstall(dir))} run -- <command>`);
   });
 
   it("does not ask for bookkeeping turns (unconditional incident list, manual resolve)", () => {
@@ -44,6 +45,15 @@ describe("runInit", () => {
     const claude = fs.readFileSync(path.join(dir, "CLAUDE.md"), "utf8");
     expect(claude).toContain("`dev-blackbox run -- <command>`");
     expect(claude).not.toContain("npx dev-blackbox");
+  });
+
+  it("uses the source CLI path and keeps its hook idempotent", () => {
+    const source = path.join(dir, "source checkout", "dist", "cli.js");
+    expect(detectInstall(dir, source)).toBe("source");
+    expect(cliCommand("source", source)).toBe(`node '${source}'`);
+    runInit(dir, { install: "source", hooks: "claude-code" });
+    expect(runInit(dir, { install: "source", hooks: "claude-code" }).hooksConfigured).toBe(false);
+    expect(fs.readFileSync(path.join(dir, "CLAUDE.md"), "utf8")).toContain(cliCommand("source"));
   });
 
   it("is idempotent: re-running never duplicates the block (spec 15)", () => {

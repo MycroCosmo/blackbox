@@ -27,15 +27,16 @@ Event shape (only `request.method` and `request.url` are required):
 
 Trace linking: generate a trace id on the frontend, send it to your backend as
 the `X-Dev-Blackbox-Trace-Id` header, and report it as `traceId` from both
-sides. `dev-blackbox network show REQ-...` then returns every event on the
-same trace.
+sides. `dev-blackbox network list --trace <traceId>` lists explicitly linked
+events with pagination. `network show REQ-...` returns one bounded detail.
 
 Snippets:
 
 - [playwright-complex-app](playwright-complex-app/README.md) — runnable layered checkout failure and file-growth audit
 - [fetch-interceptor.md](fetch-interceptor.md) — browser/Node fetch wrapper
 - [axios-interceptor.md](axios-interceptor.md) — Axios interceptors
-- [spring-filter.md](spring-filter.md) — Spring Boot `OncePerRequestFilter`
+- [spring-local](spring-local/README.md) — runnable Spring/Logback request, cause, log and async example
+- [spring-filter.md](spring-filter.md) — Spring integration entry point
 - [fastapi-middleware.md](fastapi-middleware.md) — FastAPI middleware
 
 Notes:

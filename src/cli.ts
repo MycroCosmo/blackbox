@@ -7,7 +7,7 @@ import { loadConfig } from "./config.js";
 import { runDevSession } from "./dev-session.js";
 import { runMcpServer } from "./mcp-server.js";
 import { replayRequest } from "./replay.js";
-import { publicIncident, setPinned, setStatus } from "./incident.js";
+import { setPinned, setStatus } from "./incident.js";
 import { runInit } from "./init.js";
 import { renderNetworkReport } from "./network-report.js";
 import {
@@ -22,7 +22,9 @@ import { formatBytes, prune, storageStatus } from "./retention.js";
 import { resolveOutputMode } from "./condense.js";
 import { runCommand } from "./runner.js";
 import { Storage } from "./storage.js";
-import { SCHEMA_VERSION, type IncidentRecord } from "./types.js";
+import { SCHEMA_VERSION } from "./types.js";
+import { listRecords, getIncident, getNetwork, type Query } from "./query.js";
+import { diagnose } from "./diagnostics.js";
 import { VERSION } from "./version.js";
 
 /** CLI (spec 9). Query commands support `--format json` with a stable,
@@ -46,22 +48,26 @@ function printJson(value: unknown): void {
   process.stdout.write(JSON.stringify(value, null, 2) + "\n");
 }
 
-function incidentSummary(i: IncidentRecord) {
-  return {
-    incidentId: i.incidentId,
-    fingerprint: i.fingerprint,
-    kind: i.kind,
-    errorType: i.errorType,
-    message: i.message,
-    status: i.status,
-    pinned: i.pinned,
-    firstSeenAt: i.firstSeenAt,
-    lastSeenAt: i.lastSeenAt,
-    occurrenceCount: i.occurrenceCount,
-    lastCommand: i.lastCommand,
-    lastExitCode: i.lastExitCode,
-  };
+function queryOptions(command: Command): Command {
+  return command.option("--since <time>", "ISO timestamp, inclusive")
+    .option("--until <time>", "ISO timestamp, inclusive")
+    .option("--service <name>", "application name")
+    .option("--request-id <id>", "one occurrence")
+    .option("--incident-id <id>", "occurrences of an incident")
+    .option("--trace-id <id>", "explicit trace correlation")
+    .option("--error <text>", "error type/message contains")
+    .option("--limit <n>", "page size", "20")
+    .option("--max-bytes <n>", "JSON response budget", "16384")
+    .option("--cursor <cursor>", "next page; keep filters")
+    .option("--after <cursor>", "new records after pollCursor; keep filters")
+    .option("--view <view>", "detail | raw", "detail")
+    .option("--start-line <n>", "raw starting line (1-based)")
+    .option("--line-count <n>", "raw lines to select")
+    .option("--section <section>", "raw logs | stack | event", "event");
 }
+
+program.command("doctor").description("Check local collector, storage and optional Java runtimes")
+  .action(async () => { const { storage, config } = ctx(); printJson(await diagnose(storage, config)); });
 
 // ---------------------------------------------------------------- init
 program
@@ -86,6 +92,8 @@ program
     ];
     if (result.install === "global") {
       lines.push("· Using the global install: agent rules call `dev-blackbox` directly");
+    } else if (result.install === "source") {
+      lines.push("· Using this source checkout: agent rules call its CLI path directly");
     } else if (result.install === "npx") {
       lines.push(
         "· dev-blackbox is not installed, so agents will go through npx on every call.",
@@ -165,57 +173,14 @@ program
 // ---------------------------------------------------------------- incident
 const incident = program.command("incident").description("Inspect and manage incidents");
 
-incident
-  .command("list")
-  .description("List incidents")
-  .option("--format <format>", "output format: text | json", "text")
-  .option("--all", "include resolved incidents")
-  .action((opts: { format: string; all?: boolean }) => {
-    const { storage } = ctx();
-    let incidents = storage.readIncidents();
-    if (!opts.all) incidents = incidents.filter((i) => i.status !== "resolved");
-    if (opts.format === "json") {
-      printJson({ schemaVersion: SCHEMA_VERSION, incidents: incidents.map(incidentSummary) });
-      return;
-    }
-    if (incidents.length === 0) {
-      console.log("No incidents.");
-      return;
-    }
-    for (const i of incidents) {
-      console.log(
-        `${i.incidentId}  [${i.status}]${i.pinned ? " [pinned]" : ""}  ${i.errorType}  x${i.occurrenceCount}  last: ${i.lastSeenAt}  cmd: ${i.lastCommand}`,
-      );
-    }
-  });
+queryOptions(incident.command("list").description("List grouped incidents with bounded pages"))
+  .option("--format <format>", "text | json", "text").option("--all", "include resolved")
+  .action((opts: Query) => { const { storage } = ctx(); printJson(listRecords(storage, { ...opts, status: opts.all ? undefined : "unresolved" }, "incidents")); });
 
-incident
-  .command("show")
-  .description("Show one incident in full detail")
-  .argument("<id>")
-  .option("--format <format>", "output format: text | json", "text")
-  .option("--log-lines <n>", "how many trailing log lines to include", "50")
-  .action((id: string, opts: { format: string; logLines: string }) => {
-    const { storage, config } = ctx();
-    const inc = storage.findIncident(id);
-    if (!inc) {
-      process.stderr.write(`Incident not found: ${id}\n`);
-      process.exitCode = 1;
-      return;
-    }
-    const n = Math.max(0, Number(opts.logLines) || 50);
-    const log = inc.logBlob ? storage.readLogBlob(inc.logBlob) : undefined;
-    const logTail = log ? log.split("\n").slice(-n) : [];
-    if (opts.format === "json") {
-      printJson({ schemaVersion: SCHEMA_VERSION, incident: publicIncident(inc), logTail });
-      return;
-    }
-    console.log(renderIncidentReport(inc, config.reportLanguage));
-    if (logTail.length > 0) {
-      console.log("## Log tail\n");
-      console.log(logTail.join("\n"));
-    }
-  });
+queryOptions(incident.command("show").description("Request and root cause; raw only on demand").argument("<id>"))
+  .option("--format <format>", "text | json", "text")
+  .option("--log-lines <n>", "deprecated: use --view raw --section logs")
+  .action((id: string, opts: Query) => { const { storage } = ctx(); printJson(getIncident(storage, id, opts)); });
 
 incident
   .command("report")
@@ -302,71 +267,13 @@ program
 // ---------------------------------------------------------------- network
 const network = program.command("network").description("Inspect recorded network events");
 
-network
-  .command("list")
-  .description("List recorded network events")
-  .option("--format <format>", "output format: text | json", "text")
-  .option("--limit <n>", "max events to show (newest last)", "50")
-  .option("--trace <traceId>", "only events with this trace id")
-  .option("--failed", "only failures")
-  .action((opts: { format: string; limit: string; trace?: string; failed?: boolean }) => {
-    const { storage } = ctx();
-    let events = storage.readNetwork();
-    if (opts.trace) events = events.filter((e) => e.traceId === opts.trace);
-    if (opts.failed) {
-      events = events.filter((e) => e.classification !== "success" && e.classification !== "slow_response");
-    }
-    events = events.slice(-Math.max(1, Number(opts.limit) || 50));
-    if (opts.format === "json") {
-      printJson({
-        schemaVersion: SCHEMA_VERSION,
-        events: events.map((e) => ({
-          requestId: e.requestId,
-          sessionId: e.sessionId,
-          timestamp: e.timestamp,
-          traceId: e.traceId,
-          method: e.method,
-          url: e.url,
-          status: e.status,
-          durationMs: e.durationMs,
-          classification: e.classification,
-        })),
-      });
-      return;
-    }
-    if (events.length === 0) {
-      console.log("No network events.");
-      return;
-    }
-    for (const e of events) {
-      console.log(
-        `${e.requestId}  ${e.timestamp.slice(11, 19)}  ${e.method} ${e.url}  ${e.status ?? "-"}  ${e.durationMs != null ? e.durationMs + "ms" : "-"}  ${e.classification}${e.traceId ? "  trace:" + e.traceId : ""}`,
-      );
-    }
-  });
+queryOptions(network.command("list").description("List request summaries with bounded pages"))
+  .option("--format <format>", "text | json", "text").option("--trace <id>", "trace id (alias)").option("--failed", "failures only")
+  .action((opts: Query) => { const { storage } = ctx(); printJson(listRecords(storage, { ...opts, traceId: opts.traceId ?? opts.trace, failedOnly: opts.failed }, "events")); });
 
-network
-  .command("show")
-  .description("Show one network event, including other events on the same trace")
-  .argument("<requestId>")
-  .option("--format <format>", "output format: text | json", "text")
-  .action((requestId: string, opts: { format: string }) => {
-    const { storage } = ctx();
-    const event = storage.findNetwork(requestId);
-    if (!event) {
-      process.stderr.write(`Network event not found: ${requestId}\n`);
-      process.exitCode = 1;
-      return;
-    }
-    const trace = event.traceId
-      ? storage.readNetwork().filter((e) => e.traceId === event.traceId && e.requestId !== event.requestId)
-      : [];
-    if (opts.format === "json") {
-      printJson({ schemaVersion: SCHEMA_VERSION, event, trace });
-      return;
-    }
-    printJson({ event, trace }); // detailed view is JSON either way; text mode adds no wrapper
-  });
+queryOptions(network.command("show").description("Request detail, or paged raw profile").argument("<requestId>"))
+  .option("--format <format>", "text | json", "text")
+  .action((id: string, opts: Query) => { const { storage } = ctx(); printJson(getNetwork(storage, id, opts)); });
 
 network
   .command("replay")

@@ -68,4 +68,7 @@ export { changedFiles, takeWorkspaceSnapshot, type WorkspaceSnapshot } from "./w
 export { Redactor } from "./security.js";
 export { Storage, readJsonl } from "./storage.js";
 export { VERSION } from "./version.js";
+export { listRecords, getIncident, getNetwork, type Query } from "./query.js";
+export { buildProfile, applicationFrames, type RequestProfile } from "./request-profile.js";
+export { diagnose } from "./diagnostics.js";
 export * from "./types.js";

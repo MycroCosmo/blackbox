@@ -1,4 +1,5 @@
 import readline from "node:readline";
+import { listRecords, getIncident, getNetwork, queryProperties } from "./query.js";
 import type { BlackboxConfig } from "./config.js";
 import { publicIncident } from "./incident.js";
 import { renderNetworkReport } from "./network-report.js";
@@ -48,12 +49,12 @@ const TOOLS: ToolDef[] = [
   },
   {
     name: "get_incident",
-    description: "Get one incident in full detail, including the tail of its captured log.",
+    description: "Get one incident with its latest request, root cause and selected application frames.",
     inputSchema: {
       type: "object",
       properties: {
         incidentId: { type: "string" },
-        logLines: { type: "number", description: "trailing log lines to include (default 50)" },
+        logLines: { type: "number", description: "deprecated; use view=raw for logs" },
       },
       required: ["incidentId"],
     },
@@ -82,7 +83,7 @@ const TOOLS: ToolDef[] = [
   },
   {
     name: "get_network_request",
-    description: "Get one network event in full detail plus every event sharing its trace id.",
+    description: "Get one request summary and bounded profile. Use list_network_requests with traceId to explicitly follow linked requests.",
     inputSchema: {
       type: "object",
       properties: { requestId: { type: "string" } },
@@ -116,6 +117,14 @@ const TOOLS: ToolDef[] = [
     },
   },
 ];
+
+for (const tool of TOOLS) {
+  if (["list_incidents", "get_incident", "list_network_requests", "get_network_request"].includes(tool.name)) {
+    const schema = tool.inputSchema as { properties: object };
+    schema.properties = { ...schema.properties, ...queryProperties };
+    tool.description += " Bounded summary/detail by default. Use view=raw and section=logs/stack/event for originals; nextCursor paginates, pollCursor with after polls new occurrences.";
+  }
+}
 
 function tokenize(text: string): Set<string> {
   return new Set(
@@ -166,27 +175,10 @@ export function createMcpTools(storage: Storage, config: BlackboxConfig) {
         };
       }
       case "list_incidents": {
-        let incidents = storage.readIncidents();
-        if (typeof args.status === "string") incidents = incidents.filter((i) => i.status === args.status);
-        return {
-          incidents: incidents.map((i) => ({
-            incidentId: i.incidentId,
-            kind: i.kind,
-            errorType: i.errorType,
-            message: i.message,
-            status: i.status,
-            occurrenceCount: i.occurrenceCount,
-            lastSeenAt: i.lastSeenAt,
-            lastCommand: i.lastCommand,
-          })),
-        };
+        return listRecords(storage, args, "incidents");
       }
       case "get_incident": {
-        const inc = storage.findIncident(String(args.incidentId ?? ""));
-        if (!inc) throw new Error(`incident not found: ${args.incidentId}`);
-        const n = typeof args.logLines === "number" ? args.logLines : 50;
-        const log = inc.logBlob ? storage.readLogBlob(inc.logBlob) : undefined;
-        return { incident: publicIncident(inc), logTail: log ? log.split("\n").slice(-n) : [] };
+        return getIncident(storage, String(args.incidentId ?? ""), args);
       }
       case "find_similar_incidents": {
         const query = tokenize(String(args.query ?? ""));
@@ -208,33 +200,10 @@ export function createMcpTools(storage: Storage, config: BlackboxConfig) {
         };
       }
       case "list_network_requests": {
-        let events = storage.readNetwork();
-        if (typeof args.traceId === "string") events = events.filter((e) => e.traceId === args.traceId);
-        if (args.failedOnly === true) {
-          events = events.filter((e) => e.classification !== "success" && e.classification !== "slow_response");
-        }
-        const limit = typeof args.limit === "number" ? args.limit : 50;
-        return {
-          events: events.slice(-limit).map((e) => ({
-            requestId: e.requestId,
-            timestamp: e.timestamp,
-            traceId: e.traceId,
-            method: e.method,
-            url: e.url,
-            status: e.status,
-            durationMs: e.durationMs,
-            classification: e.classification,
-            incidentId: e.incidentId,
-          })),
-        };
+        return listRecords(storage, args, "events");
       }
       case "get_network_request": {
-        const event = storage.findNetwork(String(args.requestId ?? ""));
-        if (!event) throw new Error(`network event not found: ${args.requestId}`);
-        const trace = event.traceId
-          ? storage.readNetwork().filter((e) => e.traceId === event.traceId && e.requestId !== event.requestId)
-          : [];
-        return { event, trace };
+        return getNetwork(storage, String(args.requestId ?? ""), args);
       }
       case "replay_request": {
         return replayRequest(storage, String(args.requestId ?? ""), {
